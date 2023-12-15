@@ -1,193 +1,161 @@
-#include "main.h"
+#include "FS.h"
+#include "esp_task_wdt.h"
+#include <SD.h>
+#include "SPIFFS.h"
+#include <Arduino.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/event_groups.h"
+#include "FreeRTOSConfig.h"
+#include "ArduinoJson.h"
+#include "opago_spiffs.h"
+#include "logger.h"
+#include "json-rpc.h"
+#include "config.h"
+#include "util.h"
+#include "opago_wifi.h"
+#include "power.h"
+#include "screen.h"
+#include "screen_tft.h"
+#include "keypad.h"
+#include "nfc.h"
+#include "cap_touch.h"
+#include "Adafruit_MPR121.h"
+#include "app.h"
 
+#define MPR_SDA   32
+#define MPR_SCL   33
+#define MPR_IRQ   35
+
+//GLOBAL VARIABLES
+
+//WEB Server
+AsyncWebServer server(80); // Create a web server on port 80
+bool serverStarted = false; // Declare serverStarted as a global variable
+
+//TASK Handles
+TaskHandle_t appTaskHandle = NULL;
+TaskHandle_t nfcTaskHandle = NULL;
+TaskHandle_t wifiTaskHandle = NULL;
+
+//SLEEP MODE
+unsigned int sleepModeDelay = 600000;
+unsigned long lastActivityTime = 0;
+bool isFakeSleeping = false;
+
+//GROUP Handles
+EventGroupHandle_t nfcEventGroup = xEventGroupCreate();
+EventGroupHandle_t appEventGroup = xEventGroupCreate();
+
+//WIFI TASK
+bool onlineStatus = false;
+SemaphoreHandle_t wifiSemaphore = xSemaphoreCreateMutex();;
+
+//TFT SCREEN
+TFT_eSPI tft = TFT_eSPI();  
+int rightMargin = 31; 
+int screenWidth = 320 - rightMargin;
+
+//CAP touch
+Adafruit_MPR121 cap = Adafruit_MPR121();
+
+//NFC variables
+String lnurlwNFC = "";
+
+//PAYMENT variables
 uint16_t amountCentsDivisor = 1;
 unsigned short maxNumKeysPressed = 12;
-unsigned int sleepModeDelay;
-
-std::string pin = "";
 std::string qrcodeData = "";
-std::string keysBuffer = "";
-const std::string keyBufferCharList = "0123456789";
 
-void appendToKeyBuffer(const std::string &key) {
-	if (keyBufferCharList.find(key) != std::string::npos) {
-		keysBuffer += key;
-	}
-}
+void initBoot() {
+    //init the serial port
+    Serial.begin(115200);
+    esp_task_wdt_init(20, true); //increase watchdog timer
 
-std::string leftTrimZeros(const std::string &keys) {
-	return std::string(keys).erase(0, std::min(keys.find_first_not_of('0'), keys.size() - 1));
-}
+    //DANGER The following two lines may look innocent and superflous, but if you remove them, you will get an next to undebuggable display error.
+    pinMode(2, OUTPUT);
+    digitalWrite(2, HIGH);
 
-double keysToAmount(const std::string &t_keys) {
-	if (t_keys == "") {
-		return 0;
-	}
-	const std::string trimmed = leftTrimZeros(t_keys);
-	double amount = std::stod(trimmed.c_str());
-	if (amountCentsDivisor > 1) {
-		amount = amount / amountCentsDivisor;
-	}
-	return amount;
+    opago_spiffs::init();
+    config::init();
+    logger::init();
+    logger::write(firmwareName + ": Firmware version = " + firmwareVersion + ", commit hash = " + firmwareCommitHash);
+    logger::write(config::getConfigurationsAsString());
+    power::init();
+    jsonRpc::init();
+    screen::init();
+    keypad::init();
+    const unsigned short fiatPrecision = config::getUnsignedShort("fiatPrecision");
+    amountCentsDivisor = std::pow(10, fiatPrecision);
+    if (fiatPrecision > 0) {
+        maxNumKeysPressed--;
+    }
+
+    TJpgDec.setJpgScale(1);
+    TJpgDec.setSwapBytes(true);
+
+    //init Cap Touch
+    Serial.println("MPR ...");
+    Wire1.begin(MPR_SDA, MPR_SCL);
+    scanDevices(&Wire1);
+    Wire1.beginTransmission(0x5A);
+
+    if (Wire1.endTransmission() == 0) {
+        // Default address is 0x5A, if tied to 3.3V its 0x5B
+        // If tied to SDA its 0x5C and if SCL then 0x5D
+        if (!cap.begin(0x5A, &Wire1, 127, 127)) {
+            Serial.println("MPR121 not found, check wiring?");
+            while (1);
+        }
+        cap.setThresholds(5, 5); //configure sensitivity
+        Serial.println("MPR121 found!");
+
+    } else {
+        Serial.println("Didn't find MPR121!");
+        delay(1000);
+    }
+
+    //init WiFi
+    logger::write("Initializing WiFi ...");
+    if (xTaskCreate(WiFiTask, "Wifi Connect Task", 5000, NULL, 1, &wifiTaskHandle) != pdPASS) {
+        Serial.println("Failed to create wifi task");
+    }
+
 }
 
 void setup() {
-	Serial.begin(MONITOR_SPEED);
-	spiffs::init();
-	config::init();
-	logger::init();
-	logger::write(firmwareName + ": Firmware version = " + firmwareVersion + ", commit hash = " + firmwareCommitHash);
-	logger::write(config::getConfigurationsAsString());
-	power::init();
-	jsonRpc::init();
-	screen::init();
-	keypad::init();
-	const unsigned short fiatPrecision = config::getUnsignedShort("fiatPrecision");
-	amountCentsDivisor = std::pow(10, fiatPrecision);
-	if (fiatPrecision > 0) {
-		maxNumKeysPressed--;
-	}
-	sleepModeDelay = config::getUnsignedInt("sleepModeDelay");
-	if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_UNDEFINED) {
-		// Waking up from deep sleep...
-		cache::init();
-		const std::string lastScreen = cache::getString("lastScreen");
-		pin = cache::getString("pin");
-		qrcodeData = cache::getString("qrcodeData");
-		keysBuffer = cache::getString("keysBuffer");
-		cache::end();
-		logger::write("Waking up... ");
-		if (lastScreen == "home") {
-			screen::showHomeScreen();
-		} else if (lastScreen == "enterAmount") {
-			screen::showEnterAmountScreen(keysToAmount(keysBuffer));
-		} else if (lastScreen == "paymentQRCode") {
-			screen::showPaymentQRCodeScreen(qrcodeData);
-		} else if (lastScreen == "paymentPin") {
-			screen::showPaymentPinScreen(pin);
-		}
-	}
-}
+    initBoot();
+    if (nfcEventGroup == NULL) {
+        Serial.println("Failed to create NFC event group");
+    } else {
+        xEventGroupClearBits(nfcEventGroup, (1 << 0) | (1 << 1)); // Clear power up bit and idle bit 1
+        xEventGroupSetBits(nfcEventGroup, (1 << 2)); // Set long idle signal 2
+        if(xTaskCreate(nfcTask, "NFC Task", 8000, NULL, 2, &nfcTaskHandle) != pdPASS) {
+            Serial.println("Failed to create NFC task");
+        }
+    }
+    
+    if(xTaskCreate(appTask, "App Task", 8000, NULL, 2, &appTaskHandle) != pdPASS) {
+        Serial.println("Failed to create App task");
+    }
+    vTaskSuspend(appTaskHandle); // Create the task in suspended state
 
-unsigned long lastActivityTime = millis();
-bool isFakeSleeping = false;
+    // Check if appEventGroup is correctly initialized
+    if (appEventGroup == NULL) {
+        Serial.println("Failed to create App event group");
+        esp_restart();
+    }
 
-void handleSleepMode() {
-	if (sleepModeDelay > 0) {
-		if (millis() - lastActivityTime > sleepModeDelay) {
-			if (power::isUSBPowered()) {
-				if (!isFakeSleeping) {
-					// The battery does not charge while in deep sleep mode.
-					// So let's just turn off the screen instead.
-					screen::sleep();
-					isFakeSleeping = true;
-				}
-			} else {
-				cache::init();
-				cache::save("pin", pin);
-				cache::save("keysBuffer", keysBuffer);
-				cache::save("qrcodeData", qrcodeData);
-				cache::save("lastScreen", screen::getCurrentScreen());
-				cache::end();
-				power::sleep();
-			}
-		} else if (isFakeSleeping) {
-			screen::wakeup();
-			const std::string lastScreen = screen::getCurrentScreen();
-			if (lastScreen == "home") {
-				screen::showHomeScreen();
-			} else if (lastScreen == "enterAmount") {
-				screen::showEnterAmountScreen(keysToAmount(keysBuffer));
-			} else if (lastScreen == "paymentQRCode") {
-				screen::showPaymentQRCodeScreen(qrcodeData);
-			} else if (lastScreen == "paymentPin") {
-				screen::showPaymentPinScreen(pin);
-			}
-			isFakeSleeping = false;
-		}
-	}
-}
-
-void runAppLoop() {
-	power::loop();
-	handleSleepMode();
-	keypad::loop();
-	const std::string currentScreen = screen::getCurrentScreen();
-	if (currentScreen == "") {
-		screen::showHomeScreen();
-	}
-	const std::string keyPressed = keypad::getPressedKey();
-	if (keyPressed != "") {
-		logger::write("Key pressed: " + keyPressed);
-		lastActivityTime = millis();
-	}
-	if (currentScreen == "home") {
-		if (keyPressed == "") {
-			// Do nothing.
-		} else if (keyPressed == "*") {
-			keysBuffer = "";
-			screen::showEnterAmountScreen(keysToAmount(keysBuffer));
-		} else if (keyPressed == "#") {
-			screen::showEnterAmountScreen(keysToAmount(keysBuffer));
-		} else {
-			if (keyPressed != "0" || keysBuffer != "") {
-				appendToKeyBuffer(keyPressed);
-			}
-			screen::showEnterAmountScreen(keysToAmount(keysBuffer));
-		}
-	} else if (currentScreen == "enterAmount") {
-		if (keyPressed == "") {
-			// Do nothing.
-		} else if (keyPressed == "*") {
-			keysBuffer = "";
-			screen::showEnterAmountScreen(keysToAmount(keysBuffer));
-		} else if (keyPressed == "#") {
-			const double amount = keysToAmount(keysBuffer);
-			if (amount > 0) {
-				qrcodeData = "";
-				pin = util::generateRandomPin();
-				const std::string signedUrl = util::createLnurlPay(amount, pin);
-				const std::string encoded = util::lnurlEncode(signedUrl);
-				// Allows upper or lower case URI schema prefix via a configuration option.
-				// Some wallet apps might not support uppercase URI prefixes.
-				qrcodeData += config::getString("uriSchemaPrefix");
-				// QR codes with only uppercase letters are less complex (easier to scan).
-				qrcodeData += util::toUpperCase(encoded);
-				screen::showPaymentQRCodeScreen(qrcodeData);
-				logger::write("Payment request shown: \n" + signedUrl);
-			}
-		} else if (keysBuffer.size() < maxNumKeysPressed) {
-			if (keyPressed != "0" || keysBuffer != "") {
-				appendToKeyBuffer(keyPressed);
-				logger::write("keysBuffer = " + keysBuffer);
-				screen::showEnterAmountScreen(keysToAmount(keysBuffer));
-			}
-		}
-	} else if (currentScreen == "paymentQRCode") {
-		if (keyPressed == "#") {
-			screen::showPaymentPinScreen(pin);
-		} else if (keyPressed == "1") {
-			screen::adjustContrast(-10);// decrease contrast
-		} else if (keyPressed == "4") {
-			screen::adjustContrast(10);// increase contrast
-		}
-	} else if (currentScreen == "paymentPin") {
-		if (keyPressed == "*") {
-			keysBuffer = "";
-			screen::showHomeScreen();
-		}
-	}
-	if (power::isUSBPowered()) {
-		screen::hideBatteryPercent();
-	} else {
-		screen::showBatteryPercent(power::getBatteryPercent());
-	}
+    vTaskResume(appTaskHandle); 
 }
 
 void loop() {
-	logger::loop();
-	jsonRpc::loop();
-	if (!jsonRpc::hasPinConflict() || !jsonRpc::inUse()) {
-		runAppLoop();
-	}
+
+}
+
+
+extern "C" void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) 
+{
+    Serial.printf("Stack overflow in task %s\n", pcTaskName);
+    esp_restart();
 }
