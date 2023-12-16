@@ -44,7 +44,7 @@ bool initNFC(PN532_I2C** pn532_i2c, Adafruit_PN532** nfc, PN532** pn532, NfcAdap
     Serial.println("[nfcTask] Initializing NFC ...");
     // Initialize the I2C bus with the correct SDA and SCL pins
     Wire.begin(NFC_SDA, NFC_SCL);
-    Wire.setClock(20000);
+    Wire.setClock(40000);
     // Initialize the PN532_I2C object with the initialized Wire object
     *pn532_i2c = new PN532_I2C(Wire);
     // Initialize the PN532 object with the initialized PN532_I2C object
@@ -106,6 +106,7 @@ void setRFoff(bool turnOff, PN532_I2C* pn532_i2c) {
         if (pn532_i2c->writeCommand(commandRFon, sizeof(commandRFon)) == 0) {
             // If RF is successfully turned on, clear the flag
             logger::write("[nfcTask] RF is on");
+            setRFPower(pn532_i2c, 255); //increase power to max
             isRfOff = false;
         } else {
             logger::write("[nfcTask] Error powering up RF");
@@ -114,6 +115,28 @@ void setRFoff(bool turnOff, PN532_I2C* pn532_i2c) {
     } else {
         logger::write("[nfcTask] RF already in desired state");
     }
+}
+
+bool setRFPower(PN532_I2C* pn532_i2c, int power) {
+    // Ensure power is within the valid range (0x00 to 0xFF)
+    if (power < 0) power = 0;
+    if (power > 255) power = 255;
+
+    // Create the command array
+    uint8_t command[] = {0x32, 0x05, static_cast<uint8_t>(power)};
+
+    // Send the command to the PN532 and check if it was successful
+    int result = pn532_i2c->writeCommand(command, sizeof(command));
+
+    // Log the result
+    if (result == 0) {
+        logger::write(("Successfully set RF power to " + String(power)).c_str());
+    } else {
+        logger::write("Failed to set RF power");
+    }
+
+    // Return true if the command was successful, false otherwise
+    return (result == 0);
 }
 
 void scanDevices(TwoWire *w)
@@ -202,30 +225,36 @@ bool isLnurlw(void) {
     // Check if the URL starts with "https://" 
     if (lnurlwNFC.startsWith("https://")) {
         logger::write("[nfcTask] URL is lnurlw", "info");
+        screen::showNFCsuccess();
         return true;
     } else {
         logger::write("[nfcTask] URL is not lnurlw", "info");
+        screen::showNFCfailed();
         return false;
     }
 }
 
 void idleMode(PN532_I2C *pn532_i2c)
 {
-    // logger::write("[nfcTask] Bit 2 is set. Going into idle mode 2.", "debug");
-    // logger::write("[nfcTask] Checking RF status", "debug");
     setRFoff(true, pn532_i2c);
-    if (!isRfOff) 
+    while (!isRfOff) 
     {
-        xEventGroupClearBits(appEventGroup, 0xFF);
-        xEventGroupSetBits(appEventGroup, (1<<0)); // NFC task is active
-        // logger::write("[nfcTask] NFC task is active", "debug");
-        taskYIELD();
-        return;
+        setRFoff(true, pn532_i2c);
+        xEventGroupClearBits(appEventGroup, 0xFF); // Signal an empty app event group as long as RF is on
+        vTaskDelay(pdMS_TO_TICKS(420)); 
     }
-    logger::write("[nfcTask] NFC reader turned off, returning to NFC idling mode", "info");
-    xEventGroupClearBits(appEventGroup, 0xFF);
-    xEventGroupSetBits(appEventGroup, (1<<2) | (1<<4)); // NFC task is idle, RF is off and transition to idle mode 2 is complete
-    taskYIELD();
+    while (isRfOff) 
+    {
+        logger::write("[nfcTask] NFC reader turned off, returning to NFC idling mode", "info");
+        xEventGroupClearBits(appEventGroup, 0xFF);
+        xEventGroupSetBits(appEventGroup, (1<<1)); // Signal bit 1 once RF is off
+        vTaskDelay(pdMS_TO_TICKS(420)); 
+        if (xEventGroupGetBits(nfcEventGroup) & (1 << 0)) 
+        {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(420)); 
+    }
 }
 
 bool readAndProcessNFCData(PN532_I2C *pn532_i2c, PN532 *pn532, Adafruit_PN532 *nfc, NfcAdapter *nfcAdapter, int &readAttempts)
@@ -309,7 +338,6 @@ bool readAndProcessNFCData(PN532_I2C *pn532_i2c, PN532 *pn532, Adafruit_PN532 *n
                 Serial.println(logMessage);
                 if (isLnurlw()) 
                 {
-                    screen::showNFCsuccess();
                     return true;
                 }
             }
@@ -403,7 +431,7 @@ void nfcTask(void *args)
                 // 'uid' will be populated with the UID, and uidLength will indicate
                 // if the uid is 4 bytes (Mifare Classic) or 7 bytes (Mifare Ultralight)
                 logger::write("[nfcTask] Checking for tag", "info");
-                success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 420);
+                success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 200);
                 
                 if (success) {
                     // We seem to have a tag present
@@ -427,10 +455,21 @@ void nfcTask(void *args)
                         else
                         {
                             logger::write("[nfcTask] Withdraw from lnurlw exited with failure", "info");
-                            screen::showX();
-                            xEventGroupClearBits(appEventGroup, (1<<0)); // NFC task is not actively processing
-                            vTaskDelay(1200);
-                            screen::showPaymentQRCodeScreen(qrcodeData);
+                            screen::showSand();
+                            vTaskDelay(pdMS_TO_TICKS(4200)); // Wait for 4.2 seconds
+                            if (!paymentisMade) 
+                            {
+                                logger::write("[nfcTask] Invoice not paid", "info");
+                                screen::showX();
+                                xEventGroupClearBits(appEventGroup, (1<<0)); // NFC task is not actively processing
+                                screen::showPaymentQRCodeScreen(qrcodeData);
+                            }
+                            else 
+                            {
+                                logger::write("[nfcTask] Invoice paid", "info");
+                                screen::showSuccess();
+                                idleMode(pn532_i2c); // Enter idle mode
+                            }
                         }
                         lnurlwNFC = "";
                     } 

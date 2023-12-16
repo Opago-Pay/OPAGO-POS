@@ -13,6 +13,7 @@ extern SemaphoreHandle_t wifiSemaphore;
 extern std::string qrcodeData;
 extern bool isRfOff;
 extern Adafruit_MPR121 cap;
+extern bool paymentisMade;
 
 std::string parseCallbackUrl(const std::string &response);
 std::string parseInvoice(const std::string &json);

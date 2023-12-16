@@ -201,7 +201,7 @@ bool isPaymentMade(const std::string &paymentHash, const std::string &apiKey) {
 // Bit 1 (1 << 1): Commands nfcTask to turn off the RF functionality and transition to idle mode. This bit is used particularly after a successful payment is processed.
 bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &apiKey, const std::string &invoice) {
     // Initialize variables
-    bool paymentisMade = false;
+    paymentisMade = false;
     bool keyPressed = false;
     EventBits_t uxBits;
     const EventBits_t uxAllBits = ( 1 << 0 ) | ( 1 << 1 );
@@ -211,6 +211,7 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
 
     // Resume NFC task and tell it to turn on
     vTaskResume(nfcTaskHandle); // Resume the NFC task
+    xEventGroupClearBits(nfcEventGroup, (1 << 1)); // Clear turn off bit
     xEventGroupSetBits(nfcEventGroup, (1 << 0)); // Set power up bit
 
     // Main loop: wait for payment or cancellation
@@ -241,10 +242,11 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
                 logger::write("[payment] Payment made, signaling NFC shutdown.", "info");
                 screen::showSuccess();
                 // Signal nfcTask to shut down RF and enter Idle Mode
-                xEventGroupSetBits(nfcEventGroup, (1 << 1)); 
+                xEventGroupClearBits(nfcEventGroup, (1 << 0)); // Clear power up bit
+                xEventGroupSetBits(nfcEventGroup, (1 << 1)); // Set turn off bit
 
                 // Wait for confirmation that NFC reader is off and nfcTask is in Idle Mode
-                for (int i = 0; i < 3; ++i) { // Attempt confirmation up to 3 times
+                for (int i = 0; i < 5; ++i) { // Attempt confirmation up to 5 times
                     uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
                     if ((uxBits & (1 << 1)) != 0) {
                         break;

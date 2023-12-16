@@ -71,19 +71,20 @@ void WiFiTask(void* pvParameters) {
     if(!ssid.empty()) {
         connectToWiFi(ssid.c_str(), config::getString("wifiPwd").c_str());
         onlineStatus = true;
-        // Create a web server if the device is successfully connected to WiFi
-        if(isConnectedToWiFi()) {
-            startWebServer(); // Start the web server
-        }
+        // The web server part of the code has been commented out as per instructions
+        // if(isConnectedToWiFi()) {
+        //     startWebServer(); // Start the web server
+        // }
         // Continuously update the web server with serial output
-        while(1) {
-            startWebServer();
-            vTaskDelay(1000 / portTICK_PERIOD_MS); // Delay for a second
-        }
+        // while(1) {
+        //     startWebServer();
+        //     vTaskDelay(1000 / portTICK_PERIOD_MS); // Delay for a second
+        // }
     }
     else {
         onlineStatus = false;
         vTaskSuspend(NULL); // pause this task once it's done
     }
+    vTaskDelete(NULL); // Delete this task if it's done to prevent crashes
 }
 

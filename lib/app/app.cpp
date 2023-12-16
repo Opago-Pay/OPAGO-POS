@@ -184,7 +184,7 @@ void appTask(void* pvParameters) {
             if (keyPressed == "#") {
                 pinBuffer = "";
                 screen::showPaymentPinScreen(pinBuffer);
-            } else if (getLongTouch('*', 210)) { //long press to cancel payment
+            } else if (keyPressed == "*") { 
                 screen::showX();
                 vTaskDelay(pdMS_TO_TICKS(2100));
                 screen::showHomeScreen();

@@ -66,6 +66,7 @@ String lnurlwNFC = "";
 uint16_t amountCentsDivisor = 1;
 unsigned short maxNumKeysPressed = 12;
 std::string qrcodeData = "";
+bool paymentisMade = false;
 
 void initBoot() {
     //init the serial port
