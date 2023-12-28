@@ -4,7 +4,7 @@ namespace {
 
 	const char* logFilePath = "/opago.log";
 	const unsigned int logFileMaxBytes = 32768;
-	const uint8_t maxLogFileNum = 5;
+	const uint8_t maxLogFileNum = 2;
 	unsigned long lastLogFileSizeCheckTime = millis();
 	const unsigned int logFileSizeCheckDelay = 5000;
 	const char* defaultLogLevel = "info";

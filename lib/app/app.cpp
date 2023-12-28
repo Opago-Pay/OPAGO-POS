@@ -80,7 +80,7 @@ void appTask(void* pvParameters) {
             jsonRpc::loop();
         }
         const std::string currentScreen = screen::getCurrentScreen();
-        logger::write("Current Screen: " + currentScreen);
+        //logger::write("Current Screen: " + currentScreen);
         if (currentScreen == "") {
             screen::showHomeScreen();
             keysBuffer = "";
@@ -88,7 +88,7 @@ void appTask(void* pvParameters) {
         }
         const std::string keyPressed = keypad::getPressedKey();
         if (keyPressed != "") {
-            logger::write("Key pressed: " + keyPressed);
+            logger::write("Key pressed: " + keyPressed, "debug");
             lastActivityTime = millis();
         }
         if (currentScreen == "home") {
@@ -146,13 +146,13 @@ void appTask(void* pvParameters) {
                             onlineStatus = false;
                             screen::showPaymentQRCodeScreen(qrcodeDatafallback);
                             logger::write("Payment request shown: \n" + signedUrl);
-                            logger::write("QR Code data: \n" + qrcodeDatafallback);
+                            logger::write("QR Code data: \n" + qrcodeDatafallback, "debug");
                         } else {
                             keysBuffer = "";
                             screen::showPaymentQRCodeScreen(qrcodeData);
                             logger::write("Payment request shown: \n" + qrcodeData);
                             paymentHash = fetchPaymentHash(qrcodeData);
-                            logger::write("Payment hash: " + paymentHash);
+                            logger::write("Payment hash: " + paymentHash, "debug");
                             paymentMade = waitForPaymentOrCancel(paymentHash, config::getString("apiKey.key"), qrcodeData);
                             if (!paymentMade) { 
                                 screen::showX();
@@ -170,7 +170,7 @@ void appTask(void* pvParameters) {
                         logger::write("Device is offline, displaying payment QR code...");
                         screen::showPaymentQRCodeScreen(qrcodeData);
                         logger::write("Payment request shown: \n" + signedUrl);
-                        logger::write("QR Code data: \n" + qrcodeData);
+                        logger::write("QR Code data: \n" + qrcodeData, "debug");
                     }
                 }
             } else if (keysBuffer.size() < maxNumKeysPressed) {
@@ -184,7 +184,7 @@ void appTask(void* pvParameters) {
             if (keyPressed == "#") {
                 pinBuffer = "";
                 screen::showPaymentPinScreen(pinBuffer);
-            } else if (keyPressed == "*") { 
+            } else if (keyPressed == "*" || getLongTouch('*', 210)) { 
                 screen::showX();
                 vTaskDelay(pdMS_TO_TICKS(2100));
                 screen::showHomeScreen();

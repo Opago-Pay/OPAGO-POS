@@ -230,9 +230,9 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
             logger::write("[payment] Checking if paid.", "info");
             paymentisMade = isPaymentMade(paymentHash, apiKey);
             if (!paymentisMade) {
-                logger::write("[payment] Checking for user cancellation", "info");
+                logger::write("[payment] Checking for user cancellation", "debug");
                 keyPressed = getLongTouch('*', 120);
-                logger::write("[payment] Checked for user cancellation.", "info");
+                logger::write("[payment] Checked for user cancellation.", "debug");
                 if (keyPressed) {
                     logger::write("[payment] Payment cancelled by user.", "info");
                     return false;
