@@ -217,6 +217,9 @@ void appTask(void* pvParameters) {
                             incorrectPinAttempts = 0;
                             vTaskDelay(pdMS_TO_TICKS(2100));
                             screen::showHomeScreen();
+                        } else {
+                            vTaskDelay(pdMS_TO_TICKS(420));
+                            screen::showPaymentPinScreen(pinBuffer);
                         }
                     }
                 }

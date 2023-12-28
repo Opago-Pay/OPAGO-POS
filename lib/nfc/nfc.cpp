@@ -9,22 +9,22 @@ void printTaskState(TaskHandle_t taskHandle) {
 
     switch(taskState) {
         case eReady:
-            logger::write("Task is ready to run");
+            logger::write("Task is ready to run", "debug");
             break;
         case eRunning:
-            logger::write("Task is currently running");
+            logger::write("Task is currently running", "debug");
             break;
         case eBlocked:
-            logger::write("Task is blocked");
+            logger::write("Task is blocked", "debug");
             break;
         case eSuspended:
-            logger::write("Task is suspended");
+            logger::write("Task is suspended", "debug");
             break;
         case eDeleted:
-            logger::write("Task is being deleted");
+            logger::write("Task is being deleted", "debug");
             break;
         default:
-            logger::write("Unknown state");
+            logger::write("Unknown state", "debug");
             break;
     }
 }
@@ -89,31 +89,31 @@ void setRFoff(bool turnOff, PN532_I2C* pn532_i2c) {
     uint8_t commandRFon[7] = { 0x02, 0x02, 0x00, 0xD4, 0x02, 0x2A, 0x00 };
     // Check the desired state
     if (turnOff && !isRfOff) {
-        logger::write("[nfcTask] Powering down RF");
+        logger::write("[nfcTask] Powering down RF", "debug");
         // Try to turn off RF
         if (pn532_i2c->writeCommand(commandRFoff, sizeof(commandRFoff)) == 0) {
             // If RF is successfully turned off, set the flag
-            logger::write("[nfcTask] RF is off");
+            logger::write("[nfcTask] RF is off", "debug");
             isRfOff = true;
-            logger::write("[nfcTask] RF is off - Flag set");
+            logger::write("[nfcTask] RF is off - Flag set", "debug");
         } else {
-            logger::write("[nfcTask] Error powering down RF");
+            logger::write("[nfcTask] Error powering down RF", "debug");
         }
     } else if (!turnOff && isRfOff) {
-        logger::write("[nfcTask] Powering up RF");
+        logger::write("[nfcTask] Powering up RF", "debug");
         // Try to turn on RF
         vTaskDelay(21);
         if (pn532_i2c->writeCommand(commandRFon, sizeof(commandRFon)) == 0) {
             // If RF is successfully turned on, clear the flag
-            logger::write("[nfcTask] RF is on");
+            logger::write("[nfcTask] RF is on", "debug");
             setRFPower(pn532_i2c, 255); //increase power to max
             isRfOff = false;
         } else {
-            logger::write("[nfcTask] Error powering up RF");
+            logger::write("[nfcTask] Error powering up RF", "debug");
             ESP.restart();
         }
     } else {
-        logger::write("[nfcTask] RF already in desired state");
+        logger::write("[nfcTask] RF already in desired state", "debug");
     }
 }
 
@@ -130,9 +130,9 @@ bool setRFPower(PN532_I2C* pn532_i2c, int power) {
 
     // Log the result
     if (result == 0) {
-        logger::write(("Successfully set RF power to " + String(power)).c_str());
+        logger::write(("Successfully set RF power to " + String(power)).c_str(), "debug");
     } else {
-        logger::write("Failed to set RF power");
+        logger::write("Failed to set RF power", "debug");
     }
 
     // Return true if the command was successful, false otherwise
@@ -156,7 +156,7 @@ void scanDevices(TwoWire *w)
                 message += "0";
             }
             message += String(addr, HEX);
-            logger::write(message.c_str());
+            logger::write(message.c_str(), "debug");
             break;
 
         } else if (err == 4) {
@@ -165,11 +165,11 @@ void scanDevices(TwoWire *w)
                 message += "0";
             }
             message += String(addr, HEX);
-            logger::write(message.c_str());
+            logger::write(message.c_str(), "debug");
         }
     }
     if (nDevices == 0)
-        logger::write("[nfcTask] No I2C devices found\n");
+        logger::write("[nfcTask] No I2C devices found\n", "debug");
 }
 
 bool isLnurlw(void) {
@@ -430,12 +430,12 @@ void nfcTask(void *args)
                 // Wait for an ISO14443A type cards (Mifare, etc.). When one is found
                 // 'uid' will be populated with the UID, and uidLength will indicate
                 // if the uid is 4 bytes (Mifare Classic) or 7 bytes (Mifare Ultralight)
-                logger::write("[nfcTask] Checking for tag", "info");
+                logger::write("[nfcTask] Checking for tag", "debug");
                 success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 200);
                 
                 if (success) {
                     // We seem to have a tag present
-                    logger::write("[nfcTask] Tag detected.", "info");
+                    logger::write("[nfcTask] Tag detected.", "debug");
                     screen::showNFC();
                     
                     // Reading and processing the NFC data
@@ -448,13 +448,13 @@ void nfcTask(void *args)
                         bool withdrawSuccess = withdrawFromLnurlw(lnurlwNFC, qrcodeData);
                         if (withdrawSuccess)
                         {
-                            logger::write("[nfcTask] Withdraw from lnurlw exited with success", "info");
+                            logger::write("[nfcTask] Withdraw from lnurlw exited with success", "debug");
                             screen::showSuccess();
                             idleMode(pn532_i2c); // Enter idle mode
                         }
                         else
                         {
-                            logger::write("[nfcTask] Withdraw from lnurlw exited with failure", "info");
+                            logger::write("[nfcTask] Withdraw from lnurlw exited with failure", "debug");
                             screen::showSand();
                             vTaskDelay(pdMS_TO_TICKS(4200)); // Wait for 4.2 seconds
                             if (!paymentisMade) 
@@ -475,7 +475,7 @@ void nfcTask(void *args)
                     } 
                     else 
                     {
-                        logger::write("[nfcTask] NFC card reading exited with failure", "info");
+                        logger::write("[nfcTask] NFC card reading exited with failure", "debug");
                         screen::showNFCfailed();
                         lnurlwNFC = "";
                         xEventGroupClearBits(appEventGroup, (1<<0)); // NFC task is not actively processing

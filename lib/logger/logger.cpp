@@ -4,7 +4,7 @@ namespace {
 
 	const char* logFilePath = "/opago.log";
 	const unsigned int logFileMaxBytes = 32768;
-	const uint8_t maxLogFileNum = 2;
+	const uint8_t maxLogFileNum = 1;
 	unsigned long lastLogFileSizeCheckTime = millis();
 	const unsigned int logFileSizeCheckDelay = 5000;
 	const char* defaultLogLevel = "info";
@@ -56,7 +56,7 @@ namespace {
 	}
 
 	void writeToLogFile(const std::string &msg) {
-		opago_spiffs::appendFile(logFilePath, msg.c_str());
+		// opago_spiffs::appendFile(logFilePath, msg.c_str()); // Commented out to disable writing to file
 	}
 }
 
