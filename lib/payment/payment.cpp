@@ -246,11 +246,15 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
                 xEventGroupSetBits(nfcEventGroup, (1 << 1)); // Set turn off bit
 
                 // Wait for confirmation that NFC reader is off and nfcTask is in Idle Mode
-                for (int i = 0; i < 5; ++i) { // Attempt confirmation up to 5 times
+                for (int i = 0; i < 10; ++i) { // Attempt confirmation up to 10 times
                     uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
                     if ((uxBits & (1 << 1)) != 0) {
+                        vTaskSuspend(nfcTaskHandle); // Suspend the NFC task
                         break;
                     } else {
+                        // Signal nfcTask to shut down RF and enter Idle Mode
+                        xEventGroupClearBits(nfcEventGroup, (1 << 0)); // Clear power up bit
+                        xEventGroupSetBits(nfcEventGroup, (1 << 1)); // Set turn off bit
                         vTaskDelay(pdMS_TO_TICKS(500)); // Short delay before retry
                     }
                 }
@@ -269,8 +273,6 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
         logger::write("[payment] Payment has been made.", "info");
     }
 
-    // Suspend NFC task and exit successfully
-    vTaskSuspend(nfcTaskHandle); // Suspend the NFC task
     logger::write("[payment] Returning to App Loop", "debug");
     //increase sensitivity again
     cap.setThresholds(5, 5); //configure sensitivity
