@@ -68,7 +68,19 @@ namespace power {
 
 	bool isUSBPowered() {
 		const float voltage = getInputVoltage();
+		//Serial.println("Input Voltage = " + String(voltage));
 		return voltage > 4.5 || voltage < 1;
+	}
+
+	bool isCharging() {
+		const float voltage = getInputVoltage();
+		//Serial.println("Voltage = " + String(voltage));
+		static bool isChargingStatus = false;
+		if (millis() - lastGetBatteryPercentTime > getBatteryPercentDebounce) {
+			isChargingStatus = voltage >= 4.5 && voltage <= 4.80;
+			lastGetBatteryPercentTime = millis();
+		}
+		return isChargingStatus;
 	}
 
 	void sleep() {
@@ -78,7 +90,9 @@ namespace power {
 	}
 
 	int getBatteryPercent(const bool &force) {
-		if (!(batteryMaxVolts > 0) || !(batteryMinVolts > 0)) {
+		if (!(batteryMaxVolts > 0)) {
+			return 100;
+		} else if (!(batteryMinVolts > 0)) {
 			return 0;
 		}
 		if (!force && lastGetBatteryPercentTime > 0 && millis() - lastGetBatteryPercentTime < getBatteryPercentDebounce) {

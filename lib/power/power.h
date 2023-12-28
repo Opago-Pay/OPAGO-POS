@@ -11,6 +11,7 @@ namespace power {
 	void loop();
 	bool isUSBPowered();
 	void sleep();
+	bool isCharging();
 	int getBatteryPercent(const bool &force = false);
 }
 

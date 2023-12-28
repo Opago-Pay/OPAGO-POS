@@ -4,6 +4,7 @@
 #include "i18n.h"
 #include "logger.h"
 #include "util.h"
+#include "power.h"
 
 #include "Arduino.h"
 #include "qrcode.h"

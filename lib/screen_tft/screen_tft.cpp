@@ -318,28 +318,36 @@ namespace screen_tft {
 	}
 
 	void showBatteryPercent(const int &percent) {
+		// Clear the previous battery percent text using a fixed height according to the Courier_Prime_Code12pt8b
+		tft.fillRect(batteryPercentBBox.x, batteryPercentBBox.y, screenWidth, 12, bgColor);
+		const std::string percentText = std::to_string(percent) + "%";
+		uint16_t color;
+		if (percent >= 66) {
+			color = 0x07E0; // Bright green
+		} else if (percent >= 33) {
+			color = 0xFD20; // Bright orange
+		} else {
+			color = 0xF800; // Bright red
+		}
 		if (currentPaymentQRCodeData == "" && !(batteryPercentBBox.w > 0)) {
-			const std::string percentText = std::to_string(percent) + "%";
-			uint16_t color;
-			if (percent >= 66) {
-				color = 0x07E0; // Bright green
-			} else if (percent >= 33) {
-				color = 0xFD20; // Bright orange
-			} else {
-				color = 0xF800; // Bright red
-			}
 			batteryPercentBBox = renderText(percentText, Courier_Prime_Code12pt8b, color, screenWidth-10, 10, TR_DATUM);
 		}
 	}
 
-
 	void hideBatteryPercent() {
-		if (batteryPercentBBox.w > 0) {
-			tft.fillRect(batteryPercentBBox.x, batteryPercentBBox.y, batteryPercentBBox.w, batteryPercentBBox.h, bgColor);
-			batteryPercentBBox.x = 0;
-			batteryPercentBBox.y = 0;
-			batteryPercentBBox.w = 0;
-			batteryPercentBBox.h = 0;
+		// Clear the previous battery percent text using a fixed height according to the Courier_Prime_Code12pt8b
+		tft.fillRect(batteryPercentBBox.x, batteryPercentBBox.y, screenWidth, 12, bgColor);
+		if (currentPaymentQRCodeData == "") {
+			std::string statusText;
+			uint16_t color;
+			if (power::isCharging()) {
+				statusText = "Charging";
+				color = 0x07E0; // Bright green
+			} else {
+				statusText = "USB";
+				color = TFT_WHITE;
+			}
+			batteryPercentBBox = renderText(statusText, Courier_Prime_Code12pt8b, color, screenWidth-10, 10, TR_DATUM);
 		}
 	}
 
