@@ -74,7 +74,7 @@ void appTask(void* pvParameters) {
     int signal;
     while(1) {
         power::loop();
-        handleSleepMode();
+        //handleSleepMode();
         if (!jsonRpc::hasPinConflict() || !jsonRpc::inUse()) {
             logger::loop();
             jsonRpc::loop();

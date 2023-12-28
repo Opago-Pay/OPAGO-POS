@@ -236,6 +236,17 @@ namespace screen_tft {
 			TJpgDec.setCallback(jpgRender);
 			TJpgDec.drawFsJpg(xpos, ypos, jpgFile);
 			jpgFile.close();
+		} else {
+			// Clear the screen before displaying error message
+			clearScreen();
+			// If the jpg file cannot be loaded, display the filename in the middle of the screen
+			if (filename != NULL && strlen(filename) > 0) {
+				renderText(filename, Courier_Prime_Code18pt8b, TFT_WHITE, center_x, center_y);
+				Serial.println("Displaying alternate text: " + String(filename));
+			} else {
+				renderText("Filesystem error.", Courier_Prime_Code18pt8b, TFT_WHITE, center_x, center_y);
+				Serial.println("Displaying alternate text: Error");
+			}
 		}
 	}
 
