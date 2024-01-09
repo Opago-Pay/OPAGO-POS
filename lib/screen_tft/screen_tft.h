@@ -60,6 +60,8 @@ extern TFT_eSPI tft;
 extern int screenWidth;
 extern bool onlineStatus;
 extern bool initFlagNFC;
+extern double amount;
+extern std::string currentScreen;
 
 namespace screen_tft {
 	void init();

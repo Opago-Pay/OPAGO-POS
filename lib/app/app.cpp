@@ -4,7 +4,6 @@ std::string pin = "";
 std::string qrcodeDatafallback = "";
 std::string keysBuffer = "";
 const std::string keyBufferCharList = "0123456789";
-double amount = 0;
 bool correctPin = false;
 std::string pinBuffer = "";
 int incorrectPinAttempts = 0;

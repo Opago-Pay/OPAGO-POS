@@ -6,6 +6,7 @@
 #include "screen_tft.h"
 
 extern TFT_eSPI tft;
+extern std::string currentScreen;
 
 namespace screen {
 	void init();

@@ -323,8 +323,8 @@ namespace screen_tft {
 
 	void showStatusSymbols(const int &batteryPercent) {
 		// Check if battery is below 15%
-		if (batteryPercent < 15) {
-			// Render E19C in the 56% mode in the middle of the screen in bright red
+		if (batteryPercent < 5) {
+			// Render E19C in 56pt in the middle of the screen in bright red
 			tft.fillRect(0, 0, screenWidth, tft.height(), bgColor); // Fill the screen with bgColor
 			renderText("\uE19C", MaterialIcons_Regular_56pt_chare19c56pt8b, 0xF800, center_x - 15, center_y + 50, TC_DATUM);
 		} else {
@@ -380,11 +380,21 @@ namespace screen_tft {
 					batteryBBox = renderText("\uE19C", MaterialIcons_Regular_12pt_chare19c12pt8b, color, screenWidth - 35, 30, TL_DATUM);
 				}
 			}
-
-			// Check if the device is in demo mode
+			
+			//Serial.println(currentScreen.c_str());
 			if (config::getString("callbackUrl") == "https://lnbits.opago-pay.com/lnurldevice/api/v1/lnurl/hTUMG") {
 				// Render "DEMO MODE" in the top center of the screen in bright red
-				renderText("DEMO MODE", Courier_Prime_Code18pt8b, 0xF800, center_x, 0, TC_DATUM);
+				renderText("DEMO MODE", Courier_Prime_Code16pt8b, 0xF800, center_x, 0, TC_DATUM);
+			} else if (currentScreen == "paymentQRCode") {
+				// Use the utility function to format the amount with the desired precision
+				std::string amountStr = util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision"));
+				std::string currencyStr = config::getString("fiatCurrency");
+
+				// Combine the formatted amount and currency into one string
+				std::string amountText = amountStr + " " + currencyStr;
+
+				// Render the combined amount and currency string on the screen
+				renderText(amountText.c_str(), Courier_Prime_Code12pt8b, TFT_WHITE, center_x, 0, TC_DATUM);
 			}
 
 			// Update the global bounding box for status symbols

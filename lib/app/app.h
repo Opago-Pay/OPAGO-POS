@@ -17,6 +17,7 @@
 extern bool lnurlwNFCFound;
 extern String lnurlwNFC;
 extern QueueHandle_t appQueue;
+extern double amount;
 extern uint16_t amountCentsDivisor;
 extern unsigned short maxNumKeysPressed;
 extern std::string qrcodeData;

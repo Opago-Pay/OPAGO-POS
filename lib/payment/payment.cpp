@@ -83,11 +83,8 @@ std::string requestInvoice(const std::string &url) {
 
 std::string fetchPaymentHash(const std::string &lnurl) {
     HTTPClient http;
-    std::string callbackUrl = config::getString("callbackUrl");
-    size_t start = callbackUrl.find("//") + 2;
-    size_t end = callbackUrl.find("/", start);
-    std::string domain = callbackUrl.substr(start, end - start);
-    http.begin(domain.c_str(), "/api/v1/payments/decode");
+    // Use the complete URL as a single string argument for http.begin()
+    http.begin("https://lnbits.opago-pay.com/api/v1/payments/decode");
     http.addHeader("Content-Type", "application/json");
 
     // Create the request body
@@ -104,6 +101,7 @@ std::string fetchPaymentHash(const std::string &lnurl) {
 
         if (error) {
             logger::write("Failed to parse JSON from decode response: " + std::string(error.c_str()));
+            http.end();  // Close the connection
             return "";
         }
         
@@ -111,6 +109,7 @@ std::string fetchPaymentHash(const std::string &lnurl) {
         const char* paymentHash = doc["payment_hash"];
         if (!paymentHash) {
             logger::write("Payment hash not found in decode response");
+            http.end();  // Close the connection
             return "";
         }
 
@@ -120,9 +119,9 @@ std::string fetchPaymentHash(const std::string &lnurl) {
     } else {
         // Handle error
         logger::write("Error on HTTP request for decoding invoice: " + std::to_string(httpResponseCode));
+        http.end();  // Close the connection
     }
 
-    http.end();
     return "";
 }
 

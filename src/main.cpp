@@ -55,14 +55,17 @@ SemaphoreHandle_t wifiSemaphore = xSemaphoreCreateMutex();;
 TFT_eSPI tft = TFT_eSPI();  
 int rightMargin = 31; 
 int screenWidth = 320 - rightMargin;
+std::string currentScreen = "";
 
 //CAP touch
 Adafruit_MPR121 cap = Adafruit_MPR121();
 
 //NFC variables
 String lnurlwNFC = "";
+bool initFlagNFC = false;
 
 //PAYMENT variables
+double amount = 0;
 uint16_t amountCentsDivisor = 1;
 unsigned short maxNumKeysPressed = 12;
 std::string qrcodeData = "";
@@ -85,6 +88,7 @@ void initBoot() {
     power::init();
     jsonRpc::init();
     screen::init();
+    screen::showStatusSymbols(power::getBatteryPercent());
     keypad::init();
     const unsigned short fiatPrecision = config::getUnsignedShort("fiatPrecision");
     amountCentsDivisor = std::pow(10, fiatPrecision);

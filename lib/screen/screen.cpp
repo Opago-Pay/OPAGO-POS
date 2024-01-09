@@ -1,9 +1,5 @@
 #include "screen.h"
 
-namespace {
-	std::string currentScreen = "";
-}
-
 namespace screen {
 
 	void init() {
@@ -73,8 +69,8 @@ namespace screen {
 
 	void showPaymentQRCodeScreen(const std::string &qrcodeData) {
 		logger::write("Show screen: Payment QR Code", "debug");
-		screen_tft::showPaymentQRCodeScreen(qrcodeData);
 		currentScreen = "paymentQRCode";
+		screen_tft::showPaymentQRCodeScreen(qrcodeData);
 		logger::write("Current Screen " + getCurrentScreen(), "debug");
 	}
 
@@ -98,6 +94,7 @@ namespace screen {
 
 	void showStatusSymbols(const int &batteryPercent) {
 		screen_tft::showStatusSymbols(batteryPercent);
+		// Check if the device is in demo mode
 	}
 
 	void sleep() {
