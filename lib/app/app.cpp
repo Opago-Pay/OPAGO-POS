@@ -137,6 +137,7 @@ void appTask(void* pvParameters) {
                         //if WiFi is connected, we can fetch the invoice from the server
                         screen::showSand();
                         onlineStatus = true;
+                        screen::showStatusSymbols(power::getBatteryPercent());
                         std::string paymentHash = "";
                         bool paymentMade = false;
                         qrcodeData = requestInvoice(signedUrl);
@@ -144,6 +145,7 @@ void appTask(void* pvParameters) {
                             keysBuffer = "";
                             logger::write("Server connection failed. Falling back to offline mode.");
                             onlineStatus = false;
+                            screen::showStatusSymbols(power::getBatteryPercent());
                             screen::showPaymentQRCodeScreen(qrcodeDatafallback);
                             logger::write("Payment request shown: \n" + signedUrl);
                             logger::write("QR Code data: \n" + qrcodeDatafallback, "debug");
@@ -228,11 +230,7 @@ void appTask(void* pvParameters) {
                 }
             }
         }
-        if (power::isUSBPowered()) {
-            screen::hideBatteryPercent();
-        } else {
-            screen::showBatteryPercent(power::getBatteryPercent());
-        }
+        screen::showStatusSymbols(power::getBatteryPercent());
         //UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
         //Serial.print("High water mark App Main Loop: ");
         //Serial.println(uxHighWaterMark);

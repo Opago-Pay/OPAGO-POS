@@ -15,8 +15,8 @@ namespace {
 		{"locale", "en"},
 		{"tftRotation", "3"},
 		{"sleepModeDelay", "600000"},
-		{"batteryMaxVolts", "3.7"},
-		{"batteryMinVolts", "2.5"},
+		{"batteryMaxVolts", "4.2"},
+		{"batteryMinVolts", "3.2"},
 		{"contrastLevel", "75"},
 		{"logLevel", "info"},
 		{"spiffsFormatted", "false"},
@@ -130,30 +130,6 @@ namespace config {
 			std::cout << "Failed to initialize non-volatile storage" << std::endl;
 		}
 		endNVS();
-		// Hard-coded configuration overrides - for development purposes.
-		// Uncomment the following lines, as needed, to override config options.
-		/*values["apiKey.key"] = "BueokH4o3FmhWmbvqyqLKz";
-		values["apiKey.encoding"] = "";
-		values["callbackUrl"] = "https://lnbits.opago-pay.com/lnurldevice/api/v1/lnurl/hTUMG";
-		values["uriSchemaPrefix"] = "";
-		values["fiatCurrency"] = "EUR";
-		values["fiatPrecision"] = "2";
-		values["keypadRowPins"] = "21,27,26,22";
-		values["keypadColPins"] = "33,32,25";
-		values["keypadCharList"] = "123456789*0#";
-		values["locale"] = "en";
-		values["tftRotation"] = "3";
-		values["sleepModeDelay"] = "30000";
-		values["batteryMaxVolts"] = "3.7";
-		values["batteryMinVolts"] = "2.5";
-		values["contrastLevel"] = "75";
-		values["logLevel"] = "info";
-		values["spiffsFormatted"] = "false";
-		values["wifiSSID"]="";
-		//values["wifiSSID"]="MAF";
-		values["wifiPwd"]="abcd1234";
-		//values["wifiSSID"]="WLAN-758715";
-		//values["wifiPwd"]="99757242807208466395";*/
 	}
 
 	std::string getString(const char* key) {

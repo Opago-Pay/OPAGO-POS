@@ -83,7 +83,11 @@ std::string requestInvoice(const std::string &url) {
 
 std::string fetchPaymentHash(const std::string &lnurl) {
     HTTPClient http;
-    http.begin("https://lnbits.opago-pay.com/api/v1/payments/decode");
+    std::string callbackUrl = config::getString("callbackUrl");
+    size_t start = callbackUrl.find("//") + 2;
+    size_t end = callbackUrl.find("/", start);
+    std::string domain = callbackUrl.substr(start, end - start);
+    http.begin(domain.c_str(), "/api/v1/payments/decode");
     http.addHeader("Content-Type", "application/json");
 
     // Create the request body
@@ -145,7 +149,14 @@ bool isPaymentMade(const std::string &paymentHash, const std::string &apiKey) {
     HTTPClient* http = nullptr;
     if(xSemaphoreTake(wifiSemaphore, portMAX_DELAY) == pdTRUE) {
         http = new HTTPClient();
-        std::string url = "https://lnbits.opago-pay.com/api/v1/payments/" + paymentHash;
+        // Extract the domain from the config callback url
+        std::string callbackUrl = config::getString("callbackUrl");
+        size_t domainStart = callbackUrl.find("://") + 3;
+        size_t domainEnd = callbackUrl.find("/", domainStart);
+        std::string domain = callbackUrl.substr(domainStart, domainEnd - domainStart);
+
+        // Create the url using the extracted domain
+        std::string url = "https://" + domain + "/api/v1/payments/" + paymentHash;
         http->begin(url.c_str());
 
         http->addHeader("accept", "application/json");
@@ -231,7 +242,7 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
             paymentisMade = isPaymentMade(paymentHash, apiKey);
             if (!paymentisMade) {
                 logger::write("[payment] Checking for user cancellation", "debug");
-                keyPressed = getLongTouch('*', 120);
+                keyPressed = getLongTouch('*', 42);
                 logger::write("[payment] Checked for user cancellation.", "debug");
                 if (keyPressed) {
                     logger::write("[payment] Payment cancelled by user.", "info");

@@ -90,6 +90,7 @@ void setRFoff(bool turnOff, PN532_I2C* pn532_i2c) {
     // Check the desired state
     if (turnOff && !isRfOff) {
         logger::write("[nfcTask] Powering down RF", "debug");
+        vTaskDelay(21);
         // Try to turn off RF
         if (pn532_i2c->writeCommand(commandRFoff, sizeof(commandRFoff)) == 0) {
             // If RF is successfully turned off, set the flag
@@ -368,7 +369,6 @@ bool readAndProcessNFCData(PN532_I2C *pn532_i2c, PN532 *pn532, Adafruit_PN532 *n
 void nfcTask(void *args) 
 {
     logger::write("[nfcTask] Starting NFC reader", "debug");
-    bool initFlag = false;
     uint8_t success;
     uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };
     uint8_t uidLength;
@@ -377,17 +377,33 @@ void nfcTask(void *args)
     PN532 *pn532 = NULL;
     NfcAdapter *nfcAdapter = NULL;
     
-    if (!initFlag) 
+    logger::write("[nfcTask] Initializing NFC", "debug");
+    initFlagNFC = initNFC(&pn532_i2c, &nfc, &pn532, &nfcAdapter);
+    if (!initFlagNFC) 
     {
-        logger::write("[nfcTask] Initializing NFC", "debug");
-        initNFC(&pn532_i2c, &nfc, &pn532, &nfcAdapter);
-        vTaskSuspend(NULL);
-    }
+        logger::write("[nfcTask] NFC initialization failed", "info");
+    } else 
+    {
+        logger::write("[nfcTask] NFC initialization successful", "info");
+    } 
+    vTaskSuspend(NULL);
+    
+    
     EventBits_t uxBits;
     const EventBits_t uxAllBits = (1<<0) | (1<<1);
     int loopCounter = 0;
     while (1) 
     {
+        while (!initFlagNFC) 
+        {
+            logger::write("[nfcTask] Attempting to initialize NFC", "debug");
+            initFlagNFC = initNFC(&pn532_i2c, &nfc, &pn532, &nfcAdapter);
+            if (!initFlagNFC) 
+            {
+                logger::write("[nfcTask] NFC initialization failed, retrying...", "debug");
+                vTaskDelay(pdMS_TO_TICKS(1000)); // Delay for a second before retrying
+            }
+        }
         logger::write("[nfcTask] Starting main loop", "debug");
         uxBits = xEventGroupWaitBits(nfcEventGroup, uxAllBits, pdFALSE, pdFALSE, 0);
         logger::write(("[nfcTask] Received bits: " + String(uxBits, BIN)).c_str(), "debug");

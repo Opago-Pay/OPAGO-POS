@@ -5,6 +5,7 @@
 #include "logger.h"
 #include "util.h"
 #include "power.h"
+#include "config.h"
 
 #include "Arduino.h"
 #include "qrcode.h"
@@ -44,10 +45,21 @@
 #include "courier_prime_code_38pt.h"
 #include "courier_prime_code_42pt.h"
 #include "courier_prime_code_44pt.h"
+#include "materialicons_regular_12pt_chare63e.h"
+#include "materialicons_regular_12pt_chare648.h"
+#include "materialicons_regular_12pt_chare1a3.h"
+#include "materialicons_regular_12pt_chare19c.h"
+#include "materialicons_regular_12pt_chare1a4.h"
+#include "materialicons_regular_12pt_chare1e0.h"
+#include "materialicons_regular_24pt_charea71.h"
+#include "materialicons_regular_24pt_chare06a.h"
+#include "materialicons_regular_24pt_chare00a.h"
+#include "materialicons_regular_56pt_chare19c.h"
 
 extern TFT_eSPI tft;
 extern int screenWidth;
 extern bool onlineStatus;
+extern bool initFlagNFC;
 
 namespace screen_tft {
 	void init();
@@ -58,8 +70,7 @@ namespace screen_tft {
 	void showPaymentPinScreen(const std::string &pin);
 	void showErrorScreen(const std::string &error);
 	void adjustContrast(const int &percentChange);
-	void showBatteryPercent(const int &percent);
-	void hideBatteryPercent();
+	void showStatusSymbols(const int &batteryPercent);
 	void tellBacklightStatus();
 	void sleep();
 	void wakeup();

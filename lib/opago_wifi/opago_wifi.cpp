@@ -68,23 +68,28 @@ void startWebServer() {
 
 void WiFiTask(void* pvParameters) {
     std::string ssid = config::getString("wifiSSID");
-    if(!ssid.empty()) {
-        connectToWiFi(ssid.c_str(), config::getString("wifiPwd").c_str());
-        onlineStatus = true;
-        // The web server part of the code has been commented out as per instructions
-        // if(isConnectedToWiFi()) {
-        //     startWebServer(); // Start the web server
-        // }
-        // Continuously update the web server with serial output
-        // while(1) {
-        //     startWebServer();
-        //     vTaskDelay(1000 / portTICK_PERIOD_MS); // Delay for a second
-        // }
+    std::string pwd = config::getString("wifiPwd");
+    int retryCount = 0;
+    while(true) {
+        if(!ssid.empty() && ssid.find_first_not_of(' ') != std::string::npos) {
+            connectToWiFi(ssid.c_str(), pwd.c_str());
+            if(WiFi.status() == WL_CONNECTED) {
+                onlineStatus = true;
+                retryCount = 0;
+                break;
+            }
+        }
+        else {
+            onlineStatus = false;
+            vTaskDelete(NULL);
+        }
+        retryCount++;
+        if(retryCount == 21) {
+            Serial.println("Failed to connect to WiFi after 21 attempts. Trying less often now.");
+            vTaskDelay(60000 / portTICK_PERIOD_MS); // Delay for a minute
+            retryCount = 0;
+        }
     }
-    else {
-        onlineStatus = false;
-        vTaskSuspend(NULL); // pause this task once it's done
-    }
-    vTaskDelete(NULL); // Delete this task if it's done to prevent crashes
+    vTaskSuspend(NULL); // pause this task once it's done
 }
 

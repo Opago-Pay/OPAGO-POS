@@ -96,12 +96,8 @@ namespace screen {
 		screen_tft::adjustContrast(percentChange);
 	}
 
-	void showBatteryPercent(const int &percent) {
-		screen_tft::showBatteryPercent(percent);
-	}
-
-	void hideBatteryPercent() {
-		screen_tft::hideBatteryPercent();
+	void showStatusSymbols(const int &batteryPercent) {
+		screen_tft::showStatusSymbols(batteryPercent);
 	}
 
 	void sleep() {

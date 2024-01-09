@@ -54,7 +54,10 @@ namespace {
 	};
 
 	BoundingBox amountTextBBox;
-	BoundingBox batteryPercentBBox;
+	BoundingBox statusSymbolsBBox;
+	BoundingBox wifiBBox;
+	BoundingBox usbBBox;
+	BoundingBox batteryBBox;
 
 	std::string getAmountFiatCurrencyString(const double &amount) {
 		return util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision")) + " " + config::getString("fiatCurrency");
@@ -185,10 +188,6 @@ namespace {
 		if (reset && currentPaymentQRCodeData != "") {
 			currentPaymentQRCodeData = "";
 		}
-		batteryPercentBBox.x = 0;
-		batteryPercentBBox.y = 0;
-		batteryPercentBBox.w = 0;
-		batteryPercentBBox.h = 0;
 	}
 
 	void setContrastLevel(const int &percent) {
@@ -237,8 +236,6 @@ namespace screen_tft {
 			TJpgDec.drawFsJpg(xpos, ypos, jpgFile);
 			jpgFile.close();
 		} else {
-			// Clear the screen before displaying error message
-			clearScreen();
 			// If the jpg file cannot be loaded, display the filename in the middle of the screen
 			if (filename != NULL && strlen(filename) > 0) {
 				renderText(filename, Courier_Prime_Code18pt8b, TFT_WHITE, center_x, center_y);
@@ -251,7 +248,7 @@ namespace screen_tft {
 	}
 
 	void showEnterAmountScreen(const double &amount) {
-		clearScreen();
+		clearScreen(false);
 		int16_t amount_y = center_y - 12;
 
 		std::string amountStr = util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision"));
@@ -268,25 +265,31 @@ namespace screen_tft {
 	void showPaymentQRCodeScreen(const std::string &qrcodeData) {
 		if (!onlineStatus) {
 			clearScreen(false);
-			const int16_t qr_max_w = screenWidth;
-			const int16_t qr_max_h = tft.height()-36; // Move QR code up by 20
-			renderQRCode(qrcodeData, center_x, center_y - 18, qr_max_w, qr_max_h); // Move QR code up by 20
+			showStatusSymbols(power::getBatteryPercent());
+			const int16_t qr_max_w = screenWidth; 
+			const int16_t qr_max_h = tft.height() - statusSymbolsBBox.h; // Reduce the height to keep the area of the BoundingBox statusSymbolsBBox clear of QR code
+			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
 			currentPaymentQRCodeData = qrcodeData;
-			Serial.println(("Payment QR code data: " + currentPaymentQRCodeData).c_str());
-			renderText("Offline", Courier_Prime_Code12pt8b, TFT_RED, 10, tft.height() - 10, BL_DATUM); 
-			renderText("PIN", Courier_Prime_Code12pt8b, TFT_WHITE, screenWidth - 10, tft.height() - 10, BR_DATUM); 
+			//Serial.println(("Payment QR code data: " + currentPaymentQRCodeData).c_str());
+			renderText("\uE06A", MaterialIcons_Regular_24pt_chare06a24pt8b, TFT_WHITE, screenWidth - 10, tft.height() - 10, BR_DATUM); 
 		}
 		else {
 			clearScreen(false);
+			showStatusSymbols(power::getBatteryPercent());
 			const int16_t qr_max_w = screenWidth;
-			const int16_t qr_max_h = tft.height(); // Move QR code up by 20
-			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); // Move QR code up by 20
+			const int16_t qr_max_h = tft.height() - statusSymbolsBBox.h; 
+			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
 			currentPaymentQRCodeData = qrcodeData;
+			if (initFlagNFC) {
+				renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0x07E0, 0, tft.height() - 10, BL_DATUM); // Bright green
+			} else {
+				renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0xF800, 0, tft.height() - 10, BL_DATUM); // Bright red
+			}
 		}
 	}
 
 	void showPaymentPinScreen(const std::string &pin) {
-		clearScreen();
+		clearScreen(false);
 		std::string displayPin = "____";
 		for (int i = 0; i < pin.length(); i++) {
 			displayPin[i] = pin[i];
@@ -296,10 +299,11 @@ namespace screen_tft {
 		const std::string instructionText1 = i18n::t("PIN") + ":";
 		const GFXfont instructionFont1 = getBestFitFont(instructionText1, monospaceFonts, screenWidth, pinBBox.h / 2);
 		renderText(instructionText1, instructionFont1, textColor, center_x, 0, TC_DATUM);
+		renderText("\uE00A", MaterialIcons_Regular_24pt_chare00a24pt8b, TFT_WHITE, 35, tft.height() - 10, BR_DATUM); 
 	}
 
 	void showErrorScreen(const std::string &error) {
-		clearScreen();
+		clearScreen(false);
 		const GFXfont pinFont = getBestFitFont(error, monospaceFonts);
 		const BoundingBox pinBBox = renderText(error, pinFont, textColor, center_x, center_y - 2);
 		const std::string instructionText1 = i18n::t("ERROR") + ":";
@@ -317,37 +321,77 @@ namespace screen_tft {
 		}
 	}
 
-	void showBatteryPercent(const int &percent) {
-		// Clear the previous battery percent text using a fixed height according to the Courier_Prime_Code12pt8b
-		tft.fillRect(batteryPercentBBox.x, batteryPercentBBox.y, screenWidth, 12, bgColor);
-		const std::string percentText = std::to_string(percent) + "%";
-		uint16_t color;
-		if (percent >= 66) {
-			color = 0x07E0; // Bright green
-		} else if (percent >= 33) {
-			color = 0xFD20; // Bright orange
+	void showStatusSymbols(const int &batteryPercent) {
+		// Check if battery is below 15%
+		if (batteryPercent < 15) {
+			// Render E19C in the 56% mode in the middle of the screen in bright red
+			tft.fillRect(0, 0, screenWidth, tft.height(), bgColor); // Fill the screen with bgColor
+			renderText("\uE19C", MaterialIcons_Regular_56pt_chare19c56pt8b, 0xF800, center_x - 15, center_y + 50, TC_DATUM);
 		} else {
-			color = 0xF800; // Bright red
-		}
-		if (currentPaymentQRCodeData == "" && !(batteryPercentBBox.w > 0)) {
-			batteryPercentBBox = renderText(percentText, Courier_Prime_Code12pt8b, color, screenWidth-10, 10, TR_DATUM);
-		}
-	}
+			//tft.fillRect(0, 0, screenWidth, 36, 0x001F); // Clear the area before rendering with blue color
 
-	void hideBatteryPercent() {
-		// Clear the previous battery percent text using a fixed height according to the Courier_Prime_Code12pt8b
-		tft.fillRect(batteryPercentBBox.x, batteryPercentBBox.y, screenWidth, 12, bgColor);
-		if (currentPaymentQRCodeData == "") {
-			std::string statusText;
+			// Show wifi status
 			uint16_t color;
-			if (power::isCharging()) {
-				statusText = "Charging";
-				color = 0x07E0; // Bright green
-			} else {
-				statusText = "USB";
+			if (onlineStatus) {
 				color = TFT_WHITE;
+				tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering 
+				wifiBBox = renderText("\uE63E", MaterialIcons_Regular_12pt_chare63e12pt8b, color, 5, 30, TL_DATUM);
+			} else {
+				color = 0xF800; // Bright red
+				tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering 
+				wifiBBox = renderText("\uE648", MaterialIcons_Regular_12pt_chare64812pt8b, color, 5, 30, TL_DATUM);
 			}
-			batteryPercentBBox = renderText(statusText, Courier_Prime_Code12pt8b, color, screenWidth-10, 10, TR_DATUM);
+
+			// Show USB symbol if connected to USB
+			if (power::isUSBPowered()) {
+				color = TFT_WHITE;
+				tft.fillRect(30, 5, 24, 24, bgColor); // Clear the area before rendering 
+				usbBBox = renderText("\uE1E0", MaterialIcons_Regular_12pt_chare1e012pt8b, color, 30, 30, TL_DATUM);
+			}
+
+			// Show battery status
+			if (power::isUSBPowered()) {
+				if (power::isCharging()) {
+					color = 0x07E0; // Bright green
+					tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering 
+					batteryBBox = renderText("\uE1A3", MaterialIcons_Regular_12pt_chare1a312pt8b, color, screenWidth - 35, 30, TL_DATUM);
+				} else {
+					color = TFT_WHITE;
+					tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
+					batteryBBox = renderText("\uE1A4", MaterialIcons_Regular_12pt_chare1a412pt8b, color, screenWidth - 35, 30, TL_DATUM);
+				}
+			} else {
+				tft.fillRect(30, 5, 24, 24, bgColor); // Clear the USB area before rendering 
+				if (batteryPercent >= 20) {
+					if (batteryPercent >= 80) {
+						color = 0x07E0; // Bright green
+					} else if (batteryPercent >= 60) {
+						color = 0x9E66; // Light green
+					} else if (batteryPercent >= 40) {
+						color = 0xFD20; // Bright orange
+					} else {
+						color = 0xFD60; // Light red
+					}
+					tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
+					batteryBBox = renderText("\uE1A4", MaterialIcons_Regular_12pt_chare1a412pt8b, color, screenWidth - 35, 30, TL_DATUM);
+				} else {
+					color = 0xF800; // Bright red
+					tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
+					batteryBBox = renderText("\uE19C", MaterialIcons_Regular_12pt_chare19c12pt8b, color, screenWidth - 35, 30, TL_DATUM);
+				}
+			}
+
+			// Check if the device is in demo mode
+			if (config::getString("callbackUrl") == "https://lnbits.opago-pay.com/lnurldevice/api/v1/lnurl/hTUMG") {
+				// Render "DEMO MODE" in the top center of the screen in bright red
+				renderText("DEMO MODE", Courier_Prime_Code18pt8b, 0xF800, center_x, 0, TC_DATUM);
+			}
+
+			// Update the global bounding box for status symbols
+			statusSymbolsBBox.x = 0;
+			statusSymbolsBBox.y = 0;
+			statusSymbolsBBox.w = screenWidth;
+			statusSymbolsBBox.h = 36;
 		}
 	}
 

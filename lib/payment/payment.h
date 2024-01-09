@@ -3,6 +3,7 @@
 #include "freertos/event_groups.h"
 #include "FreeRTOSConfig.h"
 #include "logger.h"
+#include "config.h"
 #include "keypad.h"
 #include "nfc.h"
 

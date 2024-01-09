@@ -11,7 +11,7 @@ namespace {
 	const unsigned int voltageCheckDelay = 10000;
 	float batteryMaxVolts;
 	float batteryMinVolts;
-	const unsigned int getBatteryPercentDebounce = 10000;
+	const unsigned int getBatteryPercentDebounce = 4200;
 	unsigned long lastGetBatteryPercentTime;
 	int lastBatteryPercent = 0;
 
@@ -76,8 +76,9 @@ namespace power {
 		const float voltage = getInputVoltage();
 		//Serial.println("Voltage = " + String(voltage));
 		static bool isChargingStatus = false;
-		if (millis() - lastGetBatteryPercentTime > getBatteryPercentDebounce) {
-			isChargingStatus = voltage >= 4.5 && voltage <= 4.80;
+		if (millis() - lastGetBatteryPercentTime > 2100) { // Hardcoded 2100ms delay as debounce
+			isChargingStatus = voltage >= 4.5 && voltage <= 4.84;
+			//Serial.println("Charging detected.");
 			lastGetBatteryPercentTime = millis();
 		}
 		return isChargingStatus;

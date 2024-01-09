@@ -22,8 +22,7 @@ namespace screen {
 	void showPaymentPinScreen(const std::string &pin);
 	void showErrorScreen(const std::string &error);
 	void adjustContrast(const int &percentChange);
-	void showBatteryPercent(const int &percent);
-	void hideBatteryPercent();
+	void showStatusSymbols(const int &batteryPercent);
 	void sleep();
 	void wakeup();
 }

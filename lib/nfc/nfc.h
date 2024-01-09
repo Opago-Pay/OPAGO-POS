@@ -27,6 +27,7 @@ extern EventGroupHandle_t nfcEventGroup;
 extern EventGroupHandle_t appEventGroup;
 
 extern String lnurlwNFC;
+extern bool initFlagNFC;
 
 extern std::string qrcodeData;
 extern bool paymentisMade;
