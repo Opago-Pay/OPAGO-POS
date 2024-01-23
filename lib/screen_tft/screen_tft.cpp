@@ -263,21 +263,22 @@ namespace screen_tft {
 	}
 
 	void showPaymentQRCodeScreen(const std::string &qrcodeData) {
-		if (!onlineStatus) {
-			clearScreen(false);
-			showStatusSymbols(power::getBatteryPercent());
-			const int16_t qr_max_w = screenWidth; 
-			const int16_t qr_max_h = tft.height() - statusSymbolsBBox.h; // Reduce the height to keep the area of the BoundingBox statusSymbolsBBox clear of QR code
+		clearScreen(false);
+		showStatusSymbols(power::getBatteryPercent());
+		const int16_t qr_max_w = screenWidth; 
+		const int16_t qr_max_h = tft.height() - statusSymbolsBBox.h; 
+		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted") {
+			// Render the QR code with the default callback URL
+			renderQRCode("https://opago-pay.com/getstarted", center_x, center_y + 18, qr_max_w, qr_max_h - 18);
+			currentPaymentQRCodeData = "https://opago-pay.com/getstarted";
+		}
+		else if (!onlineStatus) {
 			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
 			currentPaymentQRCodeData = qrcodeData;
 			//Serial.println(("Payment QR code data: " + currentPaymentQRCodeData).c_str());
 			renderText("\uE06A", MaterialIcons_Regular_24pt_chare06a24pt8b, TFT_WHITE, screenWidth - 10, tft.height() - 10, BR_DATUM); 
 		}
 		else {
-			clearScreen(false);
-			showStatusSymbols(power::getBatteryPercent());
-			const int16_t qr_max_w = screenWidth;
-			const int16_t qr_max_h = tft.height() - statusSymbolsBBox.h; 
 			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
 			currentPaymentQRCodeData = qrcodeData;
 			if (initFlagNFC) {
@@ -323,13 +324,11 @@ namespace screen_tft {
 
 	void showStatusSymbols(const int &batteryPercent) {
 		// Check if battery is below 15%
-		if (batteryPercent < 5) {
+		if (batteryPercent < 5 && amount == 0) {
 			// Render E19C in 56pt in the middle of the screen in bright red
 			tft.fillRect(0, 0, screenWidth, tft.height(), bgColor); // Fill the screen with bgColor
 			renderText("\uE19C", MaterialIcons_Regular_56pt_chare19c56pt8b, 0xF800, center_x - 15, center_y + 50, TC_DATUM);
 		} else {
-			//tft.fillRect(0, 0, screenWidth, 36, 0x001F); // Clear the area before rendering with blue color
-
 			// Show wifi status
 			uint16_t color;
 			if (onlineStatus) {
@@ -382,13 +381,17 @@ namespace screen_tft {
 			}
 			
 			//Serial.println(currentScreen.c_str());
-			if (config::getString("callbackUrl") == "https://lnbits.opago-pay.com/lnurldevice/api/v1/lnurl/hTUMG") {
+			if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted") {
 				// Render "DEMO MODE" in the top center of the screen in bright red
 				renderText("DEMO MODE", Courier_Prime_Code16pt8b, 0xF800, center_x, 0, TC_DATUM);
 			} else if (currentScreen == "paymentQRCode") {
-				// Use the utility function to format the amount with the desired precision
-				std::string amountStr = util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision"));
+				// Check the currency and adjust the amount accordingly
 				std::string currencyStr = config::getString("fiatCurrency");
+				// Use the utility function to format the amount with the desired precision
+				// If the currency is 'sat', multiply the amount by 100
+				std::string amountStr = currencyStr == "sat" 
+					? util::doubleToStringWithPrecision(amount * 100, config::getUnsignedShort("fiatPrecision"))
+					: util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision"));
 
 				// Combine the formatted amount and currency into one string
 				std::string amountText = amountStr + " " + currencyStr;

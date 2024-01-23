@@ -3,9 +3,9 @@
 namespace {
 
 	const std::map<const char*, const char*> defaultValues = {
-		{"apiKey.key", "BueokH4o3FmhWmbvqyqLKz"},
+		{"apiKey.key", ""},
 		{"apiKey.encoding", ""},
-		{"callbackUrl", "https://lnbits.opago-pay.com/lnurldevice/api/v1/lnurl/hTUMG"},
+		{"callbackUrl", "https://opago-pay.com/getstarted"},
 		{"uriSchemaPrefix", ""},
 		{"fiatCurrency", "EUR"},
 		{"fiatPrecision", "2"},
