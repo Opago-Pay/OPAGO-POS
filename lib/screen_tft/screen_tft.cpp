@@ -268,10 +268,18 @@ namespace screen_tft {
 		const int16_t qr_max_w = screenWidth; 
 		const int16_t qr_max_h = tft.height() - statusSymbolsBBox.h; 
 		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted") {
+			// Adjusting the position and size of the QR code to prevent overlap with the text
+			int qrCodeOffsetY = 8; // Moving the QR code up
+			int qrCodeHeightAdjustment = 48; // Making the QR code smaller to prevent overlap
 			// Render the QR code with the default callback URL
-			renderQRCode("https://opago-pay.com/getstarted", center_x, center_y + 18, qr_max_w, qr_max_h - 18);
+			renderQRCode("https://opago-pay.com/getstarted", center_x, center_y - qrCodeOffsetY, qr_max_w, qr_max_h - qrCodeHeightAdjustment);
 			currentPaymentQRCodeData = "https://opago-pay.com/getstarted";
+			// Render setup instructions text at the bottom of the screen
+			int textOffsetY = 48; // Moving the text up to prevent overlap with the QR code
+			renderText("Scan for Setup", Courier_Prime_Code12pt8b, TFT_WHITE, center_x, tft.height() - textOffsetY, TC_DATUM);
+			renderText("opago-pay.com/getstarted", Courier_Prime_Code10pt8b, TFT_WHITE, center_x, tft.height() - (textOffsetY - 17), TC_DATUM);
 		}
+
 		else if (!onlineStatus) {
 			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
 			currentPaymentQRCodeData = qrcodeData;
@@ -282,6 +290,7 @@ namespace screen_tft {
 			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
 			currentPaymentQRCodeData = qrcodeData;
 			if (initFlagNFC) {
+				vTaskDelay(pdMS_TO_TICKS(2100)); //delay because reader needs time to spool up rf
 				renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0x07E0, 0, tft.height() - 10, BL_DATUM); // Bright green
 			} else {
 				renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0xF800, 0, tft.height() - 10, BL_DATUM); // Bright red

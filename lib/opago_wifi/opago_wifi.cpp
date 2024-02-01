@@ -69,27 +69,44 @@ void startWebServer() {
 void WiFiTask(void* pvParameters) {
     std::string ssid = config::getString("wifiSSID");
     std::string pwd = config::getString("wifiPwd");
+
+    // Trim leading and trailing whitespaces from SSID
+    const auto ssidStart = ssid.find_first_not_of(' ');
+    const auto ssidEnd = ssid.find_last_not_of(' ');
+    const auto ssidRange = ssidEnd - ssidStart + 1;
+    if (ssidStart != std::string::npos) {
+        ssid = ssid.substr(ssidStart, ssidRange);
+    } else {
+        ssid.clear(); // Clear ssid if it contains only whitespaces
+    }
+
     int retryCount = 0;
+    unsigned long delayTime = 1000; // Start with a 1 second delay
+
     while(true) {
-        if(!ssid.empty() && ssid.find_first_not_of(' ') != std::string::npos) {
-            connectToWiFi(ssid.c_str(), pwd.c_str());
-            if(WiFi.status() == WL_CONNECTED) {
-                onlineStatus = true;
-                retryCount = 0;
-                break;
+        if(!ssid.empty()) {
+            WiFi.disconnect(true);  // Reset the WiFi module
+            delay(1000); // Wait for a second after reset
+            WiFi.begin(ssid.c_str(), pwd.c_str());
+
+            while (WiFi.status() != WL_CONNECTED) {
+                delay(delayTime);
+                Serial.print(".");
+                retryCount++;
+                if (retryCount % 5 == 0) {
+                    delayTime = std::min(delayTime * 2, 60000UL); // Double the delay, up to 1 minute
+                }
             }
-        }
-        else {
+
+            Serial.println("\nConnected to WiFi!");
+            onlineStatus = true;
+            break; // Exit the loop once connected
+        } else {
+            Serial.println("SSID is empty or contains only whitespaces. Please check the configuration.");
             onlineStatus = false;
-            vTaskDelete(NULL);
-        }
-        retryCount++;
-        if(retryCount == 21) {
-            Serial.println("Failed to connect to WiFi after 21 attempts. Trying less often now.");
-            vTaskDelay(60000 / portTICK_PERIOD_MS); // Delay for a minute
-            retryCount = 0;
+            vTaskDelete(NULL); // Delete this task if SSID is empty
         }
     }
-    vTaskSuspend(NULL); // pause this task once it's done
+    vTaskSuspend(NULL); // Suspend this task once done
 }
 
