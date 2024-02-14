@@ -4,22 +4,14 @@ namespace {
 
 	const std::map<const char*, const char*> defaultValues = {
 		{"apiKey.key", ""},
-		{"apiKey.encoding", ""},
 		{"callbackUrl", "https://opago-pay.com/getstarted"},
-		{"uriSchemaPrefix", ""},
 		{"fiatCurrency", "EUR"},
 		{"fiatPrecision", "2"},
-		{"keypadRowPins", "21,27,26,22"},
-		{"keypadColPins", "33,32,25"},
-		{"keypadCharList", "123456789*0#"},
-		{"locale", "en"},
 		{"tftRotation", "3"},
-		{"sleepModeDelay", "600000"},
 		{"batteryMaxVolts", "4.2"},
 		{"batteryMinVolts", "3.2"},
 		{"contrastLevel", "75"},
 		{"logLevel", "info"},
-		{"spiffsFormatted", "false"},
 		{"wifiSSID",""},
 		{"wifiPwd",""}
 	};

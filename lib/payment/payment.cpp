@@ -228,8 +228,6 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
     while (!paymentisMade) {
         // Wait for bits from appEventGroup
         uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(210));
-        //logger::write("[payment] appEventGroup Bit 0 value: " + std::to_string((uxBits & (1 << 0)) != 0), "info");
-        //logger::write("[payment] appEventGroup Bit 1 value: " + std::to_string((uxBits & (1 << 1)) != 0), "info");
         // Handle the received bits
         if ((uxBits & (1 << 0)) != 0) { //card has been detected
             logger::write("[payment] Checking if paid. No cancel check.", "info");
@@ -240,12 +238,20 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
             logger::write("[payment] Checking if paid.", "info");
             paymentisMade = isPaymentMade(paymentHash, apiKey);
             if (!paymentisMade) {
-                logger::write("[payment] Checking for user cancellation", "debug");
-                keyPressed = getLongTouch('*', 42);
-                logger::write("[payment] Checked for user cancellation.", "debug");
+                logger::write("[payment] Checking for user cancellation or contrast adjustment", "debug");
+                keyPressed = getLongTouch('*', 42); // Check for cancellation
                 if (keyPressed) {
                     logger::write("[payment] Payment cancelled by user.", "info");
                     return false;
+                }
+                // Check for contrast adjustment
+                std::string contrastKey = getTouch(); 
+                if (contrastKey == "1") {
+                    screen::adjustContrast(-10); // Decrease contrast
+                    logger::write("[payment] Contrast decreased.", "info");
+                } else if (contrastKey == "4") {
+                    screen::adjustContrast(10); // Increase contrast
+                    logger::write("[payment] Contrast increased.", "info");
                 }
                 taskYIELD();
             } else {

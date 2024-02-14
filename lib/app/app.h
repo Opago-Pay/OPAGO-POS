@@ -13,6 +13,7 @@
 #include "lnurl.h"
 #include "withdraw_lnurlw.h"
 #include "json-rpc.h"
+#include "opago_wifi.h"
 
 extern bool lnurlwNFCFound;
 extern String lnurlwNFC;

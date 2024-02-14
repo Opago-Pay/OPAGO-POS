@@ -162,7 +162,13 @@ void appTask(void* pvParameters) {
                                 screen::showHomeScreen();
                             } else {
                                 screen::showSuccess();
-                                vTaskDelay(pdMS_TO_TICKS(2100));
+                                TickType_t startTime = xTaskGetTickCount();
+                                while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
+                                    if (getTouch() == "*") {
+                                        break;
+                                    }
+                                    vTaskDelay(pdMS_TO_TICKS(50)); // Check for input every 50ms
+                                }
                                 keysBuffer = "";
                                 screen::showHomeScreen();
                             }
@@ -172,6 +178,17 @@ void appTask(void* pvParameters) {
                         screen::showPaymentQRCodeScreen(qrcodeData);
                         logger::write("Payment request shown: \n" + signedUrl);
                         logger::write("QR Code data: \n" + qrcodeData, "debug");
+                    }
+                } else {
+                    // Check if the device is connected to WiFi
+                    if (isConnectedToWiFi()) {
+                        // If connected, start the web server
+                        startWebServer();
+                        logger::write("Web server started.");
+                    } else {
+                        // If not connected, start the Access Point
+                        startAccessPoint();
+                        logger::write("Access Point started.");
                     }
                 }
             } else if (keysBuffer.size() < maxNumKeysPressed) {
@@ -207,7 +224,13 @@ void appTask(void* pvParameters) {
                     if (pinBuffer == pin) {
                         screen::showSuccess();
                         pinBuffer = "";
-                        vTaskDelay(pdMS_TO_TICKS(2100));
+                        TickType_t startTime = xTaskGetTickCount();
+                        while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
+                            if (getTouch() == "*") {
+                                break;
+                            }
+                            vTaskDelay(pdMS_TO_TICKS(50)); // Check for input every 50ms
+                        }
                         screen::showHomeScreen();
                     } else {
                         screen::showX();

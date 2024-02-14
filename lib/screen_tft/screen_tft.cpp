@@ -341,15 +341,28 @@ namespace screen_tft {
 			// Show wifi status
 			uint16_t color;
 			if (onlineStatus) {
-				color = TFT_WHITE;
-				tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering 
+				if (serverStarted) {
+					color = 0xFD20; // Online and server started, show orange
+				} else {
+					color = TFT_WHITE; // Online but no server, show white
+				}
+				tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
 				wifiBBox = renderText("\uE63E", MaterialIcons_Regular_12pt_chare63e12pt8b, color, 5, 30, TL_DATUM);
 			} else {
-				color = 0xF800; // Bright red
-				tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering 
-				wifiBBox = renderText("\uE648", MaterialIcons_Regular_12pt_chare64812pt8b, color, 5, 30, TL_DATUM);
+				if (serverStarted) {
+                    if (WiFi.softAPgetStationNum() > 0) {
+                        color = 0x001F; // A client is connected to AP, show blue
+                    } else {
+                        color = 0x07E0; // Offline but AP is active with no client connections, show green
+                    }
+					tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
+					wifiBBox = renderText("\uE63E", MaterialIcons_Regular_12pt_chare63e12pt8b, color, 5, 30, TL_DATUM);
+				} else {
+					color = 0xF800; // Offline with no AP, show red
+					tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
+					wifiBBox = renderText("\uE648", MaterialIcons_Regular_12pt_chare64812pt8b, color, 5, 30, TL_DATUM);
+				}
 			}
-
 			// Show USB symbol if connected to USB
 			if (power::isUSBPowered()) {
 				color = TFT_WHITE;
@@ -371,11 +384,9 @@ namespace screen_tft {
 			} else {
 				tft.fillRect(30, 5, 24, 24, bgColor); // Clear the USB area before rendering 
 				if (batteryPercent >= 20) {
-					if (batteryPercent >= 80) {
+					if (batteryPercent >= 40) {
 						color = 0x07E0; // Bright green
-					} else if (batteryPercent >= 60) {
-						color = 0x9E66; // Light green
-					} else if (batteryPercent >= 40) {
+					} else if (batteryPercent >= 20) {
 						color = 0xFD20; // Bright orange
 					} else {
 						color = 0xFD60; // Light red

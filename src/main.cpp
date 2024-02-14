@@ -32,6 +32,7 @@
 //WEB Server
 AsyncWebServer server(80); // Create a web server on port 80
 bool serverStarted = false; // Declare serverStarted as a global variable
+DNSServer dnsServer;
 
 //TASK Handles
 TaskHandle_t appTaskHandle = NULL;
@@ -74,7 +75,7 @@ bool paymentisMade = false;
 void initBoot() {
     //init the serial port
     Serial.begin(115200);
-    esp_task_wdt_init(20, true); //increase watchdog timer
+    esp_task_wdt_init(60, true); //increase watchdog timer
 
     //DANGER The following two lines may look innocent and superflous, but if you remove them, you will get an next to undebuggable display error.
     pinMode(2, OUTPUT);
@@ -155,7 +156,6 @@ void setup() {
 }
 
 void loop() {
-
 }
 
 
