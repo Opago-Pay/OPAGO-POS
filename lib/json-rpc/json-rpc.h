@@ -5,6 +5,7 @@
 #include "i18n.h"
 #include "logger.h"
 #include "opago_main.h"
+#include "opago_wifi.h"
 #include "spiffs.h"
 
 #include "ArduinoJson.h"

@@ -3,8 +3,8 @@
 namespace {
 
 	const std::map<const char*, const char*> defaultValues = {
-		{"apiKey.key", ""},
-		{"callbackUrl", "https://opago-pay.com/getstarted"},
+		{"apiKey.key", "GeBqhmFeVS4zugUza3NLTr"},
+		{"callbackUrl", "https://api.opago-pay.com/lnurldevice/api/v1/lnurl/NQNPD"},
 		{"fiatCurrency", "EUR"},
 		{"fiatPrecision", "2"},
 		{"tftRotation", "3"},
@@ -13,7 +13,10 @@ namespace {
 		{"contrastLevel", "75"},
 		{"logLevel", "info"},
 		{"wifiSSID",""},
-		{"wifiPwd",""}
+		{"wifiPwd",""},
+		{"wifiSSID2",""},
+		{"wifiPwd2",""},
+		{"tax","false"}
 	};
 
 	// https://arduinojson.org/v6/api/dynamicjsondocument/

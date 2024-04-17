@@ -181,12 +181,7 @@ void appTask(void* pvParameters) {
                     }
                 } else {
                     // Check if the device is connected to WiFi
-                    if (isConnectedToWiFi()) {
-                        // If connected, start the web server
-                        startWebServer();
-                        logger::write("Web server started.");
-                    } else {
-                        // If not connected, start the Access Point
+                    if (!isConnectedToWiFi()) {
                         startAccessPoint();
                         logger::write("Access Point started.");
                     }

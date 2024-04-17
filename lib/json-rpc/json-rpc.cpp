@@ -1,4 +1,5 @@
 #include "json-rpc.h"
+#include "opago_wifi.h"
 
 namespace {
 
@@ -173,6 +174,26 @@ namespace {
 				docOut["result"] = true;
 				serializeJson(docOut, Serial);
 				Serial.println();
+			} else if (method == "scanSSIDs") {
+				DynamicJsonDocument docOut(2048);
+				docOut["jsonrpc"] = jsonRpcVersion;
+				docOut["id"] = id;
+				docOut["result"] = scanForSSIDs();
+				serializeJson(docOut, Serial);
+				Serial.println();
+			} else if (method == "pauseWifiTask") {
+				if (wifiTaskHandle != NULL) {
+					vTaskSuspend(wifiTaskHandle);
+					logger::write("WiFi task paused successfully.");
+					DynamicJsonDocument docOut(512);
+					docOut["jsonrpc"] = jsonRpcVersion;
+					docOut["id"] = id;
+					docOut["result"] = "WiFi task paused successfully.";
+					serializeJson(docOut, Serial);
+					Serial.println();
+				} else {
+					throw JsonRpcError("WiFi task handle is NULL. Cannot pause WiFi task.");
+				}
 			} else {
 				throw JsonRpcError("Unknown method");
 			}

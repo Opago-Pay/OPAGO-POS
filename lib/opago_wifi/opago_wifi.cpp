@@ -46,7 +46,8 @@ bool isConnectedToWiFi() {
 }
 
 String scanForSSIDs() {
-    DynamicJsonDocument doc(1024);
+    Serial.println("Scanning for SSIDs...");
+    DynamicJsonDocument doc(2048);
     JsonArray ssids = doc.to<JsonArray>();
 
     int n = WiFi.scanNetworks();
@@ -56,6 +57,7 @@ String scanForSSIDs() {
 
     String output;
     serializeJson(doc, output);
+
     return output;
 }
 
@@ -71,12 +73,18 @@ void startAccessPoint() {
     Serial.print("AP Mode Started. SSID: ");
     Serial.println(apName);
 
-    vTaskDelay(210);
+    vTaskDelay(pdMS_TO_TICKS(210));
     startWebServer();
 }
 
 void startWebServer() {
     if(!serverStarted) {
+        // Suspend the WiFi task to prevent conflicts while the web server is running
+        if(wifiTaskHandle != NULL) {
+            vTaskSuspend(wifiTaskHandle);
+            Serial.println("WiFi task suspended.");
+        }
+
         dnsServer.start(53, "*", WiFi.softAPIP());
         server.begin(); // Start the web server
         serverStarted = true;
@@ -100,17 +108,24 @@ void startWebServer() {
                           "<option value='info'>Info</option>"
                           "<option value='debug'>Debug</option>"
                           "</select>"
-                          "<label for='wifiSSID' style='grid-column: 1; text-align: left;'>WiFi SSID:</label>"
+                          "<label for='wifiSSID' style='grid-column: 1; text-align: left;'>Primary WiFi SSID:</label>"
                           "<select id='wifiSSID' name='wifiSSID' style='grid-column: 2; width: 100%; background-color: #ffb100;'>"
                           "<option value=''>--select WIFI--</option>"
                           "</select>"
                           "<input type='text' id='wifiSSIDCustom' name='wifiSSIDCustom' placeholder='Or enter SSID' style='grid-column: 2; width: 100%;'>"
-                          "<label for='wifiPwd' style='grid-column: 1; text-align: left;'>WiFi Password:</label>"
+                          "<label for='wifiPwd' style='grid-column: 1; text-align: left;'>Primary WiFi Password:</label>"
                           "<input type='password' id='wifiPwd' name='wifiPwd' style='grid-column: 2; width: 100%;'>"
+                          "<label for='wifiSSID2' style='grid-column: 1; text-align: left;'>Secondary WiFi SSID:</label>"
+                          "<select id='wifiSSID2' name='wifiSSID2' style='grid-column: 2; width: 100%; background-color: #ffb100;'>"
+                          "<option value=''>--select WIFI--</option>"
+                          "</select>"
+                          "<input type='text' id='wifiSSID2Custom' name='wifiSSID2Custom' placeholder='Or enter SSID' style='grid-column: 2; width: 100%;'>"
+                          "<label for='wifiPwd2' style='grid-column: 1; text-align: left;'>Secondary WiFi Password:</label>"
+                          "<input type='password' id='wifiPwd2' name='wifiPwd2' style='grid-column: 2; width: 100%;'>"
                           "<input type='submit' value='Save' style='grid-column: 1 / span 2; margin-top: 10px; background-color: #ffb100;'>"
                           "</form>"
                           "</div>"
-                          "<script>const ssids = " + ssids + "; const select = document.getElementById('wifiSSID'); ssids.forEach(ssid => { const option = document.createElement('option'); option.value = ssid; option.text = ssid; select.appendChild(option); });</script>"
+                          "<script>const ssids = " + ssids + "; const selectPrimary = document.getElementById('wifiSSID'); const selectSecondary = document.getElementById('wifiSSID2'); ssids.forEach(ssid => { const optionPrimary = document.createElement('option'); optionPrimary.value = ssid; optionPrimary.text = ssid; selectPrimary.appendChild(optionPrimary); const optionSecondary = document.createElement('option'); optionSecondary.value = ssid; optionSecondary.text = ssid; selectSecondary.appendChild(optionSecondary); });</script>"
                           "</body></html>";
             request->send(200, "text/html", page);
         });
@@ -123,9 +138,14 @@ void startWebServer() {
             configurations["contrastLevel"] = request->arg("contrast").c_str();
             configurations["logLevel"] = request->arg("logLevel").c_str();
             String wifiSSID = request->arg("wifiSSIDCustom").isEmpty() ? request->arg("wifiSSID") : request->arg("wifiSSIDCustom");
-            if(wifiSSID != "" && wifiSSID != "--select WIFI--") { // Check if a valid SSID is selected or entered
+            String wifiSSID2 = request->arg("wifiSSID2Custom").isEmpty() ? request->arg("wifiSSID2") : request->arg("wifiSSID2Custom");
+            if(wifiSSID != "" && wifiSSID != "--select WIFI--") { // Check if a valid primary SSID is selected or entered
                 configurations["wifiSSID"] = wifiSSID.c_str();
                 configurations["wifiPwd"] = request->arg("wifiPwd").c_str();
+            }
+            if(wifiSSID2 != "" && wifiSSID2 != "--select WIFI--") { // Check if a valid secondary SSID is selected or entered
+                configurations["wifiSSID2"] = wifiSSID2.c_str();
+                configurations["wifiPwd2"] = request->arg("wifiPwd2").c_str();
             }
 
             Serial.println("Saving configurations:");
@@ -139,6 +159,12 @@ void startWebServer() {
             } else {
                 Serial.println("Failed to save configurations");
             }
+
+            // Resume the WiFi task 
+            if(wifiTaskHandle != NULL) {
+                vTaskResume(wifiTaskHandle);
+                Serial.println("WiFi task resumed.");
+            }
         });
     }
 }
@@ -146,6 +172,8 @@ void startWebServer() {
 void WiFiTask(void* pvParameters) {
     std::string ssid = config::getString("wifiSSID");
     std::string pwd = config::getString("wifiPwd");
+    std::string ssid2 = config::getString("wifiSSID2");
+    std::string pwd2 = config::getString("wifiPwd2");
 
     // Set the Hostname 
     uint32_t hash = 0;
@@ -156,42 +184,88 @@ void WiFiTask(void* pvParameters) {
     WiFi.setHostname(hostName.c_str());
 
     // Trim leading and trailing whitespaces from SSID
-    const auto ssidStart = ssid.find_first_not_of(' ');
-    const auto ssidEnd = ssid.find_last_not_of(' ');
-    const auto ssidRange = ssidEnd - ssidStart + 1;
-    if (ssidStart != std::string::npos) {
-        ssid = ssid.substr(ssidStart, ssidRange);
-    } else {
-        ssid.clear(); // Clear ssid if it contains only whitespaces
-    }
+    ssid.erase(0, ssid.find_first_not_of(" \t\n\r\f\v")); // Left trim
+    ssid.erase(ssid.find_last_not_of(" \t\n\r\f\v") + 1); // Right trim
+    ssid2.erase(0, ssid2.find_first_not_of(" \t\n\r\f\v")); // Left trim
+    ssid2.erase(ssid2.find_last_not_of(" \t\n\r\f\v") + 1); // Right trim
 
-    int retryCount = 0;
-    unsigned long delayTime = 1000; // Start with a 1 second delay
+    unsigned long backoffDelay; // Declare backoffDelay here for scope visibility
+    const unsigned long maxBackoffDelay = 32000; // Maximum delay of 32 seconds
 
-    while(true) {
-        if(!ssid.empty()) {
+    auto connectToBestNetwork = [&]() {
+        // Main loop for WiFi connection attempts
+        do {
+            backoffDelay = 1000; // Reset initial delay of 1 second for each connection attempt
             WiFi.disconnect(true);  // Reset the WiFi module
-            delay(1000); // Wait for a second after reset
-            WiFi.begin(ssid.c_str(), pwd.c_str());
+            vTaskDelay(pdMS_TO_TICKS(1000)); // Wait for a second after reset
 
-            while (WiFi.status() != WL_CONNECTED) {
-                delay(delayTime);
-                Serial.print(".");
-                retryCount++;
-                if (retryCount % 5 == 0) {
-                    delayTime = std::min(delayTime * 2, 60000UL); // Double the delay, up to 1 minute
+            // To address memory exhaustion, free the memory allocated for previous scans before starting a new scan
+            WiFi.scanDelete(); // Free memory used by previous scan
+
+            // Scan for available networks to find the BSSID with the strongest signal
+            int n = WiFi.scanNetworks();
+            struct {
+                String ssid;
+                uint8_t bssid[6]; // Corrected to the actual size of a BSSID
+                int rssi = -1000; // Start with a very low RSSI
+                std::string pwd;
+            } bestNetwork;
+
+            for (int i = 0; i < n; ++i) {
+                String currentSSID = WiFi.SSID(i);
+                int currentRSSI = WiFi.RSSI(i);
+                // Print all discovered BSSIDs and their signal strength
+                Serial.print("Discovered SSID: ");
+                Serial.print(currentSSID);
+                Serial.print(" with RSSI: ");
+                Serial.println(currentRSSI);
+
+                // Convert std::string to String for comparison
+                if ((currentSSID == String(ssid.c_str()) || currentSSID == String(ssid2.c_str())) && currentRSSI > bestNetwork.rssi) {
+                    bestNetwork.ssid = currentSSID;
+                    memcpy(bestNetwork.bssid, WiFi.BSSID(i), sizeof(bestNetwork.bssid));
+                    bestNetwork.rssi = currentRSSI;
+                    bestNetwork.pwd = (currentSSID == String(ssid.c_str())) ? pwd : pwd2;
                 }
             }
 
-            Serial.print("\nConnected to WiFi! IP Address: ");
-            Serial.println(WiFi.localIP());
-            onlineStatus = true;
-            break; // Exit the loop once connected
-        } else {
-            Serial.println("SSID is empty or contains only whitespaces. Please check the configuration.");
-            onlineStatus = false;
-            break;
+            if (bestNetwork.rssi != -1000) { // A network was found
+                Serial.print("Trying to connect to WiFi: ");
+                Serial.println(bestNetwork.ssid);
+                WiFi.begin(bestNetwork.ssid.c_str(), bestNetwork.pwd.c_str(), 0, bestNetwork.bssid);
+
+                while (WiFi.status() != WL_CONNECTED && backoffDelay <= maxBackoffDelay) {
+                    vTaskDelay(pdMS_TO_TICKS(backoffDelay));
+                    backoffDelay = min(backoffDelay * 2, maxBackoffDelay); // Exponential backoff
+                    Serial.print(".");
+                }
+
+                if (WiFi.status() == WL_CONNECTED) {
+                    Serial.print("\nConnected to WiFi! IP Address: ");
+                    Serial.println(WiFi.localIP());
+                    onlineStatus = true;
+                } else {
+                    Serial.print("\nUnable to connect to WiFi. Status code: ");
+                    Serial.print(WiFi.status());
+                    Serial.println(")");
+                    onlineStatus = false;
+                }
+            } else {
+                Serial.println("No known SSIDs found. Please check the configuration.");
+                onlineStatus = false;
+            }
+        } while (!onlineStatus); // Keep trying until connected
+    };
+
+    connectToBestNetwork(); // Initial connection attempt
+
+    // Once connected, maintain the connection
+    while (true) {
+        if (WiFi.status() != WL_CONNECTED) {
+            onlineStatus = false; // Update status to trigger reconnection
+            Serial.println("Connection lost. Attempting to reconnect...");
+            connectToBestNetwork(); // Attempt to reconnect
         }
+        vTaskDelay(pdMS_TO_TICKS(10000)); // Check connection status every 10 seconds
     }
-    vTaskSuspend(NULL);
 }
