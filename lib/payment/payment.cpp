@@ -1,5 +1,7 @@
 #include "payment.h"
 
+uint8_t lastRenderedQRCode = 0;
+bool lastConnectionLossState = false;
 
 std::string parseCallbackUrl(const std::string &response) {
     DynamicJsonDocument doc(1024);
@@ -129,18 +131,39 @@ bool isPaymentMade(const std::string &paymentHash, const std::string &apiKey) {
     // Check if Wi-Fi is connected
     if (WiFi.status() != WL_CONNECTED) {
         logger::write("Wi-Fi is not connected");
+        connectionLoss = true;
+        onlineStatus = false;
+        // Check if connection loss status has changed or 1 min has passed
+        if (connectionLoss != lastConnectionLossState || millis() - lastRenderedQRCode >= 600000) {
+            screen::showPaymentQRCodeScreen(qrcodeData);
+            lastRenderedQRCode = millis();
+            lastConnectionLossState = connectionLoss;
+        }
         return false;
+    } else {
+        connectionLoss = false;
+        onlineStatus = true;
+        // Check if connection loss status has changed or 1 min has passed
+        if (connectionLoss != lastConnectionLossState || millis() - lastRenderedQRCode >= 600000) {
+            screen::showPaymentQRCodeScreen(qrcodeData);
+            lastRenderedQRCode = millis();
+            lastConnectionLossState = connectionLoss;
+        }
     }
 
     // Check if paymentHash is not empty
     if (paymentHash.empty()) {
         logger::write("Payment hash is empty");
+        connectionLoss = true;
+        screen::showPaymentQRCodeScreen(qrcodeData);
         return false;
     }
 
     // Check if apiKey is not empty
     if (apiKey.empty()) {
         logger::write("API key is empty");
+        connectionLoss = true;
+        screen::showPaymentQRCodeScreen(qrcodeData);
         return false;
     }
 
@@ -187,6 +210,8 @@ bool isPaymentMade(const std::string &paymentHash, const std::string &apiKey) {
             return paid;
         } else {
             // Handle error
+            connectionLoss = true;
+            onlineStatus = false;
             logger::write("Error on HTTP request for payment check: " + std::to_string(httpResponseCode));
         }
 
@@ -213,6 +238,7 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
     // Initialize variables
     paymentisMade = false;
     bool keyPressed = false;
+    lastRenderedQRCode = millis();
     EventBits_t uxBits;
     const EventBits_t uxAllBits = ( 1 << 0 ) | ( 1 << 1 );
 
@@ -292,5 +318,6 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
     logger::write("[payment] Returning to App Loop", "debug");
     //increase sensitivity again
     cap.setThresholds(5, 5); //configure sensitivity
+    connectionLoss = false; //reset flag
     return paymentisMade;
 }

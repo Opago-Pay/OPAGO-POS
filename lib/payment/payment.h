@@ -15,6 +15,7 @@ extern std::string qrcodeData;
 extern bool isRfOff;
 extern Adafruit_MPR121 cap;
 extern bool paymentisMade;
+extern bool connectionLoss; 
 
 std::string parseCallbackUrl(const std::string &response);
 std::string parseInvoice(const std::string &json);

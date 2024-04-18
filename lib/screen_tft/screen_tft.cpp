@@ -280,20 +280,28 @@ namespace screen_tft {
 			renderText("opago-pay.com/getstarted", Courier_Prime_Code10pt8b, TFT_WHITE, center_x, tft.height() - (textOffsetY - 17), TC_DATUM);
 		}
 
-		else if (!onlineStatus) {
+		else if (offlineMode) {
 			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
 			currentPaymentQRCodeData = qrcodeData;
 			//Serial.println(("Payment QR code data: " + currentPaymentQRCodeData).c_str());
 			renderText("\uE06A", MaterialIcons_Regular_24pt_chare06a24pt8b, TFT_WHITE, screenWidth - 10, tft.height() - 10, BR_DATUM); 
 		}
 		else {
-			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
-			currentPaymentQRCodeData = qrcodeData;
-			if (initFlagNFC) {
-				vTaskDelay(pdMS_TO_TICKS(2100)); //delay because reader needs time to spool up rf
-				renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0x07E0, 0, tft.height() - 10, BL_DATUM); // Bright green
+			if (connectionLoss) {
+				renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
+				// Render a black square behind the wifi icon
+				tft.fillRect(center_x -14, center_y - 14, 30, 26, TFT_BLACK);
+				renderText("\uE648", MaterialIcons_Regular_12pt_chare64812pt8b, 0xF800, center_x, center_y + 10, TC_DATUM); 
+				showStatusSymbols(power::getBatteryPercent()); // Refresh the regular wifi icon
 			} else {
-				renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0xF800, 0, tft.height() - 10, BL_DATUM); // Bright red
+				renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
+				currentPaymentQRCodeData = qrcodeData;
+				if (initFlagNFC) {
+					vTaskDelay(pdMS_TO_TICKS(1200)); //delay because reader needs time to spool up rf
+					renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0x07E0, 0, tft.height() - 10, BL_DATUM); // Bright green
+				} else {
+					renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0xF800, 0, tft.height() - 10, BL_DATUM); // Bright red
+				}
 			}
 		}
 	}
@@ -334,9 +342,10 @@ namespace screen_tft {
 	void showStatusSymbols(const int &batteryPercent) {
 		// Check if battery is below 15%
 		if (batteryPercent < 5 && amount == 0) {
+			//removing this, since it is annoying
 			// Render E19C in 56pt in the middle of the screen in bright red
-			tft.fillRect(0, 0, screenWidth, tft.height(), bgColor); // Fill the screen with bgColor
-			renderText("\uE19C", MaterialIcons_Regular_56pt_chare19c56pt8b, 0xF800, center_x - 15, center_y + 50, TC_DATUM);
+			//tft.fillRect(0, 0, screenWidth, tft.height(), bgColor); // Fill the screen with bgColor
+			//renderText("\uE19C", MaterialIcons_Regular_56pt_chare19c56pt8b, 0xF800, center_x - 15, center_y + 50, TC_DATUM);
 		} else {
 			// Show wifi status
 			uint16_t color;

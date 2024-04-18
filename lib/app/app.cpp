@@ -132,10 +132,9 @@ void appTask(void* pvParameters) {
                     qrcodeData += config::getString("uriSchemaPrefix");
                     qrcodeData += util::toUpperCase(encoded);
                     qrcodeDatafallback = qrcodeData;
-                    if (WiFi.status() == WL_CONNECTED) {
+                    if (onlineStatus) {
                         //if WiFi is connected, we can fetch the invoice from the server
                         screen::showSand();
-                        onlineStatus = true;
                         screen::showStatusSymbols(power::getBatteryPercent());
                         std::string paymentHash = "";
                         bool paymentMade = false;
@@ -143,7 +142,7 @@ void appTask(void* pvParameters) {
                         if (qrcodeData.empty()) {
                             keysBuffer = "";
                             logger::write("Server connection failed. Falling back to offline mode.");
-                            onlineStatus = false;
+                            offlineMode = true;
                             screen::showStatusSymbols(power::getBatteryPercent());
                             screen::showPaymentQRCodeScreen(qrcodeDatafallback);
                             logger::write("Payment request shown: \n" + signedUrl);
@@ -157,11 +156,13 @@ void appTask(void* pvParameters) {
                             paymentMade = waitForPaymentOrCancel(paymentHash, config::getString("apiKey.key"), qrcodeData);
                             if (!paymentMade) { 
                                 screen::showX();
+                                offlineMode = false;
                                 vTaskDelay(pdMS_TO_TICKS(2100));
                                 keysBuffer = "";
                                 screen::showHomeScreen();
                             } else {
                                 screen::showSuccess();
+                                offlineMode = false;
                                 TickType_t startTime = xTaskGetTickCount();
                                 while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
                                     if (getTouch() == "*") {
@@ -174,6 +175,7 @@ void appTask(void* pvParameters) {
                             }
                         }
                     } else {
+                        offlineMode = true;
                         logger::write("Device is offline, displaying payment QR code...");
                         screen::showPaymentQRCodeScreen(qrcodeData);
                         logger::write("Payment request shown: \n" + signedUrl);
@@ -199,6 +201,7 @@ void appTask(void* pvParameters) {
                 screen::showPaymentPinScreen(pinBuffer);
             } else if (keyPressed == "*" || getLongTouch('*', 210)) { 
                 screen::showX();
+                offlineMode = false;
                 vTaskDelay(pdMS_TO_TICKS(2100));
                 screen::showHomeScreen();
             } else if (keyPressed == "1") {
@@ -218,6 +221,7 @@ void appTask(void* pvParameters) {
                 if (pinBuffer.length() == 4) {
                     if (pinBuffer == pin) {
                         screen::showSuccess();
+                        offlineMode = false;
                         pinBuffer = "";
                         TickType_t startTime = xTaskGetTickCount();
                         while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
@@ -236,6 +240,7 @@ void appTask(void* pvParameters) {
                             incorrectPinAttempts = 0;
                             vTaskDelay(pdMS_TO_TICKS(2100));
                             screen::showHomeScreen();
+                            offlineMode = false;
                         } else {
                             vTaskDelay(pdMS_TO_TICKS(420));
                             screen::showPaymentPinScreen(pinBuffer);

@@ -45,6 +45,7 @@
 #include "courier_prime_code_38pt.h"
 #include "courier_prime_code_42pt.h"
 #include "courier_prime_code_44pt.h"
+#include "courier_prime_code_46pt.h"
 #include "materialicons_regular_12pt_chare63e.h"
 #include "materialicons_regular_12pt_chare648.h"
 #include "materialicons_regular_12pt_chare1a3.h"
@@ -59,9 +60,11 @@
 extern TFT_eSPI tft;
 extern int screenWidth;
 extern bool onlineStatus;
+extern bool offlineMode;
 extern bool initFlagNFC;
 extern double amount;
 extern std::string currentScreen;
+extern bool connectionLoss;
 
 namespace screen_tft {
 	void init();

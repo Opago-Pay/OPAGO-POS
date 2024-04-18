@@ -50,6 +50,8 @@ EventGroupHandle_t appEventGroup = xEventGroupCreate();
 
 //WIFI TASK
 bool onlineStatus = false;
+bool connectionLoss = false; //indicates that the device lost connection during online payment
+bool offlineMode = false; //indicate to the device that offline mode is on, so incorrect pin entry doesn't cause inconsistent states
 SemaphoreHandle_t wifiSemaphore = xSemaphoreCreateMutex();;
 
 //TFT SCREEN
@@ -156,6 +158,12 @@ void setup() {
 }
 
 void loop() {
+    if (serverStarted) {
+        dnsServer.processNextRequest();
+        vTaskDelay(pdMS_TO_TICKS(1)); 
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(2100)); // 2100 ms delay if server not started
+    }
 }
 
 

@@ -25,6 +25,7 @@ extern std::string qrcodeData;
 extern unsigned int sleepModeDelay;
 extern unsigned long lastActivityTime;
 extern bool isFakeSleeping;
+extern bool offlineMode;
 
 void appendToKeyBuffer(const std::string &key);
 std::string leftTrimZeros(const std::string &keys);
