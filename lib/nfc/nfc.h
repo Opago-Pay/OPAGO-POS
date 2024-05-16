@@ -35,7 +35,7 @@ extern bool paymentisMade;
 bool initNFC(PN532_I2C** pn532_i2c, Adafruit_PN532** nfc, PN532** pn532, NfcAdapter** nfcAdapter);
 void printTaskState(TaskHandle_t taskHandle);
 void setRFoff(bool turnOff, PN532_I2C* pn532_i2c);
-bool setRFPower(PN532_I2C* pn532_i2c, int power);
+bool setRFPower(PN532_I2C* pn532_i2c, int power, int gain = 0x40, int modulation = 0x03, int miller = 0x0E);
 void nfcTask(void *args);
 void scanDevices(TwoWire *w);
 void printRecordPayload(const uint8_t* payload, size_t len);

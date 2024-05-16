@@ -202,6 +202,11 @@ void WiFiTask(void* pvParameters) {
     std::string ssid2 = config::getString("wifiSSID2");
     std::string pwd2 = config::getString("wifiPwd2");
 
+    IPAddress ip(0, 0, 0, 0);
+    IPAddress gateway(0, 0, 0, 0);
+    IPAddress subnet(0, 0, 0, 0);
+    WiFi.config(ip, gateway, subnet);
+
     // Set the Hostname 
     uint32_t hash = 0;
     for (int i = 0; i < WiFi.macAddress().length(); ++i) {
@@ -222,15 +227,14 @@ void WiFiTask(void* pvParameters) {
         vTaskSuspend(NULL); // Suspend the task indefinitely
     }
 
-    unsigned long backoffDelay; // Declare backoffDelay here for scope visibility
-    const unsigned long maxBackoffDelay = 32000; // Maximum delay of 32 seconds
+    unsigned long backoffDelay = 1000; // Initial backoff delay of 1 second
+    const unsigned long maxBackoffDelay = 60000; // Maximum delay of 60 seconds
     unsigned long connectionStartTime = 0; // Time when connection attempt started
-    const unsigned long connectionTimeout = 600000; // 10 minutes in milliseconds
+    const unsigned long connectionTimeout = 600000; 
 
     auto connectToBestNetwork = [&]() {
         // Main loop for WiFi connection attempts
         do {
-            backoffDelay = 1000; // Reset initial delay of 1 second for each connection attempt
             WiFi.disconnect(true);  // Reset the WiFi module
             vTaskDelay(pdMS_TO_TICKS(1000)); // Wait for a second after reset
 
@@ -269,38 +273,55 @@ void WiFiTask(void* pvParameters) {
                 }
             }
 
-            // Alternate connection attempts between the two best networks
+            // Sort the bestNetwork array based on RSSI in descending order
+            if (bestNetwork[0].rssi < bestNetwork[1].rssi) {
+                std::swap(bestNetwork[0], bestNetwork[1]);
+            }
+
+            // Try to connect to the networks in the order of their signal strength
             for (int i = 0; i < 2; ++i) {
                 if (bestNetwork[i].rssi != -1000) { // A network was found
                     Serial.print("Trying to connect to WiFi: ");
                     Serial.println(bestNetwork[i].ssid);
+                    Serial.print("With RSSI: ");
+                    Serial.println(bestNetwork[i].rssi);
                     
                     int connectionAttempts = 0;
-                    while (WiFi.status() != WL_CONNECTED && backoffDelay <= maxBackoffDelay && connectionAttempts < 6) {
+                    while (WiFi.status() != WL_CONNECTED && connectionAttempts < 6) {
                         WiFi.begin(bestNetwork[i].ssid.c_str(), bestNetwork[i].pwd.c_str(), 0, bestNetwork[i].bssid);
-                        vTaskDelay(pdMS_TO_TICKS(backoffDelay));
-                        Serial.print("WiFi status: ");
-                        Serial.println(WiFi.status());
-                        backoffDelay = min(backoffDelay * 2, maxBackoffDelay); // Exponential backoff
-                        connectionAttempts++;
-
+                        
+                        unsigned long startTime = millis();
+                        while (WiFi.status() != WL_CONNECTED && millis() - startTime < backoffDelay) {
+                            vTaskDelay(pdMS_TO_TICKS(100)); // Wait for 100ms before checking again
+                        }
+                        
                         if (WiFi.status() == WL_CONNECTED) {
                             Serial.print("\nConnected to WiFi! IP Address: ");
                             Serial.println(WiFi.localIP());
                             onlineStatus = true;
+                            backoffDelay = 1000; // Reset backoff delay on successful connection
                             break; // Exit the loop if connected
                         } else {
                             Serial.print("\nUnable to connect to WiFi. Status code: ");
                             Serial.print(WiFi.status());
                             Serial.println(" (0: WL_IDLE_STATUS, 1: WL_NO_SSID_AVAIL, 2: WL_SCAN_COMPLETED, 3: WL_CONNECTED, 4: WL_CONNECT_FAILED, 5: WL_CONNECTION_LOST, 6: WL_DISCONNECTED)");
                             onlineStatus = false;
+                            
+                            // Check the specific error code and handle accordingly
+                            if (WiFi.status() == WL_CONNECT_FAILED) {
+                                Serial.println("Connection failed. Retrying with increased delay...");
+                                backoffDelay = min(backoffDelay * 2, maxBackoffDelay); // Exponential backoff
+                            }
                         }
+                        
+                        connectionAttempts++;
                     }
+                    
                     if (onlineStatus) break; // Exit the loop if connected
                     
-                    // If 3 attempts failed, rescan for best networks
-                    if (connectionAttempts >= 3) {
-                        Serial.println("3 connection attempts failed. Rescanning for best networks...");
+                    // If 6 attempts failed, rescan for best networks
+                    if (connectionAttempts >= 6) {
+                        Serial.println("6 connection attempts failed. Rescanning for best networks...");
                         break;
                     }
                 }
@@ -308,6 +329,7 @@ void WiFiTask(void* pvParameters) {
 
             if (!onlineStatus) {
                 Serial.println("No known SSIDs found or unable to connect. Please check the configuration.");
+                vTaskDelay(pdMS_TO_TICKS(backoffDelay)); // Wait for the backoff delay before retrying
             }
 
             // Check if connection timeout has been reached
@@ -332,5 +354,3 @@ void WiFiTask(void* pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(10000)); // Check connection status every 10 seconds
     }
 }
-
-

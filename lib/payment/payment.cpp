@@ -261,6 +261,12 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
             vTaskDelay(pdMS_TO_TICKS(2100));
             continue;
         } else { //no card detected
+            // Check if NFC task is not actively processing
+            if ((uxBits & (1 << 0)) == 0 && screen::getCurrentScreen() != "paymentQRCode") {
+                // Display the payment QR code
+                screen::showPaymentQRCodeScreen(qrcodeData);
+                lastRenderedQRCode = millis();
+            }
             logger::write("[payment] Checking if paid.", "info");
             paymentisMade = isPaymentMade(paymentHash, apiKey);
             if (!paymentisMade) {

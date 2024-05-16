@@ -3,8 +3,9 @@
 namespace {
 
 	const std::map<const char*, const char*> defaultValues = {
-		{"apiKey.key", "GeBqhmFeVS4zugUza3NLTr"},
-		{"callbackUrl", "https://api.opago-pay.com/lnurldevice/api/v1/lnurl/NQNPD"},
+		{"apiKey.key", "BueokH4o3FmhWmbvqyqLKz"},
+		//{"callbackUrl", "https://api.opago-pay.com/lnurldevice/api/v1/lnurl/atEoo"},
+		{"callbackUrl", "https://opago-pay.com/getstarted"},
 		{"fiatCurrency", "EUR"},
 		{"fiatPrecision", "2"},
 		{"tftRotation", "3"},
@@ -12,8 +13,8 @@ namespace {
 		{"batteryMinVolts", "3.2"},
 		{"contrastLevel", "75"},
 		{"logLevel", "info"},
-		{"wifiSSID",""},
-		{"wifiPwd",""},
+		{"wifiSSID","Zitadelle2024"},
+		{"wifiPwd","Satoshi21!"},
 		{"wifiSSID2",""},
 		{"wifiPwd2",""},
 		{"tax","false"}

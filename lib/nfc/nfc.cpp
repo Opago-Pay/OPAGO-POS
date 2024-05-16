@@ -107,7 +107,7 @@ void setRFoff(bool turnOff, PN532_I2C* pn532_i2c) {
         if (pn532_i2c->writeCommand(commandRFon, sizeof(commandRFon)) == 0) {
             // If RF is successfully turned on, clear the flag
             logger::write("[nfcTask] RF is on", "debug");
-            setRFPower(pn532_i2c, 255); //increase power to max
+            setRFPower(pn532_i2c, 210); //increase power to max
             isRfOff = false;
         } else {
             logger::write("[nfcTask] Error powering up RF", "debug");
@@ -118,10 +118,22 @@ void setRFoff(bool turnOff, PN532_I2C* pn532_i2c) {
     }
 }
 
-bool setRFPower(PN532_I2C* pn532_i2c, int power) {
+bool setRFPower(PN532_I2C* pn532_i2c, int power, int gain, int modulation, int miller) {
     // Ensure power is within the valid range (0x00 to 0xFF)
     if (power < 0) power = 0;
     if (power > 255) power = 255;
+
+    // Ensure gain is within the valid range (0x00 to 0x7F)
+    if (gain < 0) gain = 0;
+    if (gain > 0x7F) gain = 0x7F;
+
+    // Ensure modulation is within the valid range (0x00 to 0x03)
+    if (modulation < 0) modulation = 0;
+    if (modulation > 0x03) modulation = 0x03;
+
+    // Ensure miller is within the valid range (0x00 to 0x0F)
+    if (miller < 0) miller = 0;
+    if (miller > 0x0F) miller = 0x0F;
 
     // Create the command array
     uint8_t command[] = {0x32, 0x05, static_cast<uint8_t>(power)};
@@ -136,7 +148,34 @@ bool setRFPower(PN532_I2C* pn532_i2c, int power) {
         logger::write("Failed to set RF power", "debug");
     }
 
-    // Return true if the command was successful, false otherwise
+    // Set modulation index
+    uint8_t modulationCommand[] = {0x32, 0x02, static_cast<uint8_t>(modulation)};
+    result = pn532_i2c->writeCommand(modulationCommand, sizeof(modulationCommand));
+    if (result == 0) {
+        logger::write(("Successfully set modulation index to " + String(modulation)).c_str(), "debug");
+    } else {
+        logger::write("Failed to set modulation index", "debug");
+    }
+
+    // Set number of Miller coding pulses
+    uint8_t millerCommand[] = {0x32, 0x03, static_cast<uint8_t>(miller)};
+    result = pn532_i2c->writeCommand(millerCommand, sizeof(millerCommand));
+    if (result == 0) {
+        logger::write(("Successfully set Miller coding pulses to " + String(miller)).c_str(), "debug");
+    } else {
+        logger::write("Failed to set Miller coding pulses", "debug");
+    }
+
+    // Set RxGain in RFCfg register
+    uint8_t rxGainCommand[] = {0x32, 0x0A, static_cast<uint8_t>(gain)};
+    result = pn532_i2c->writeCommand(rxGainCommand, sizeof(rxGainCommand));
+    if (result == 0) {
+        logger::write(("Successfully set RxGain to " + String(gain, HEX)).c_str(), "debug");
+    } else {
+        logger::write("Failed to set RxGain", "debug");
+    }
+
+    // Return true if all commands were successful, false otherwise
     return (result == 0);
 }
 
@@ -175,7 +214,7 @@ void scanDevices(TwoWire *w)
 
 bool isLnurlw(void) {
     logger::write("[nfcTask] Checking if URL is lnurlw", "info");
-    // Check if lnurlwNFC starts with "lnurlw", "lnurl", "lnurlp", "lightning"
+    // Check if lnurlwNFC starts with "lnurlw", "lnurl", "lnurlp", "lightning", or is a bech32-encoded LNURL
     if (lnurlwNFC.startsWith("lnurlw:")) {
         String rest = lnurlwNFC.substring(7);
         if (rest.startsWith("http") || rest.startsWith("https")) {
@@ -215,10 +254,12 @@ bool isLnurlw(void) {
             if (rest.startsWith("lnurl")) {
                 lnurlwNFC = String(Lnurl::decode(rest.c_str()).c_str());
             } else {
-                return false;
+                // Handle bech32-encoded LNURL prefixed with "lightning:"
+                lnurlwNFC = String(Lnurl::decode(rest.c_str()).c_str());
             }
         }
-    } else if (lnurlwNFC.startsWith("lnurl") && !lnurlwNFC.startsWith("lnurl:")) {
+    } else if (lnurlwNFC.startsWith("LNURL")) {
+        // Handle bech32-encoded LNURL without prefix
         lnurlwNFC = String(Lnurl::decode(lnurlwNFC.c_str()).c_str());
     } else if (lnurlwNFC.startsWith("http") && !lnurlwNFC.startsWith("https")) {
         lnurlwNFC.replace("http", "https");
@@ -263,97 +304,102 @@ bool readAndProcessNFCData(PN532_I2C *pn532_i2c, PN532 *pn532, Adafruit_PN532 *n
     NdefMessage message;
     int recordCount;
     uint8_t cardType = nfc->ntag424_isNTAG424();
-    if (cardType) 
-    {
-        uint8_t data[256];
-        uint8_t bytesread = nfc->ntag424_ISOReadFile(data);
+
+    // Always try to read as NTAG424 first
+    uint8_t data[256];
+    uint8_t bytesread = 0;
+    
+    for (int i = 0; i < 6; i++) {
+        bytesread = nfc->ntag424_ISOReadFile(data);
+        if (bytesread > 0) {
+            break;
+        }
+        readAttempts++;
+        if (readAttempts >= 12) {
+            setRFoff(true, pn532_i2c); // Switch off RF
+            if (isRfOff) {
+                return false;
+            }
+        }
+    }
+
+    if (bytesread > 0) {
         if (data[bytesread - 1] != '\0') { // Check if the last character is not a null terminator
             data[bytesread] = '\0'; // Manually add a null terminator at the end of the read data
         }
         // Extract URL from data
         lnurlwNFC = String((char*)data);
         Serial.println("URL from NTAG424: " + lnurlwNFC);
-        if (isLnurlw()) 
-        {
-            while (!isRfOff) 
-            {
+        if (isLnurlw()) {
+            while (!isRfOff) {
                 setRFoff(true, pn532_i2c); // Attempt to switch off RF
             }
             return true;
         }
-    }
-    else
-    {
-        NfcTag tag = nfcAdapter->read();
-        String tagType = tag.getTagType();
-        Serial.println("[nfcTask] Tag type read");
-        Serial.println("Tag Type: " + tagType);
-        if (tag.hasNdefMessage()) 
-        {
-            message = tag.getNdefMessage();
-            recordCount = message.getRecordCount();
-        }
-        bool lnurlwFound = false;
-        for (int i = 0; i < recordCount && !lnurlwFound; i++) 
-        {
-            NdefRecord record = message.getRecord(i);
-            String recordType = record.getType();
-            String logMessage = "Record Type: " + recordType;
-            Serial.println(logMessage);
-            if (recordType == "U" || recordType == "T") 
-            { 
-                uint8_t payload[record.getPayloadLength() + 1] = {0}; // Added +1 to the size and initialized to 0 to ensure null termination
-                record.getPayload(payload);
-                String recordPayload;
-                if (recordType == "U") 
-                {
-                    switch (payload[0]) 
-                    {
-                        case 0x01:
-                            recordPayload = "http://www.";
-                            break;
-                        case 0x02:
-                            recordPayload = "https://www.";
-                            break;
-                        case 0x03:
-                            recordPayload = "http://";
-                            break;
-                        case 0x04:
-                            recordPayload = "https://";
-                            break;
-                        default:
-                            recordPayload = String((char*)payload);
-                            break;
+    } else if (!cardType) {
+        // If card type is not NTAG424, try the alternate process
+        for (int i = 0; i < 3; i++) {
+            NfcTag tag = nfcAdapter->read();
+            String tagType = tag.getTagType();
+            Serial.println("[nfcTask] Tag type read");
+            Serial.println("Tag Type: " + tagType);
+            if (tag.hasNdefMessage()) {
+                message = tag.getNdefMessage();
+                recordCount = message.getRecordCount();
+            }
+            bool lnurlwFound = false;
+            for (int j = 0; j < recordCount && !lnurlwFound; j++) {
+                NdefRecord record = message.getRecord(j);
+                String recordType = record.getType();
+                String logMessage = "Record Type: " + recordType;
+                Serial.println(logMessage);
+                if (recordType == "U" || recordType == "T") { 
+                    uint8_t payload[record.getPayloadLength() + 1] = {0}; // Added +1 to the size and initialized to 0 to ensure null termination
+                    record.getPayload(payload);
+                    String recordPayload;
+                    if (recordType == "U") {
+                        switch (payload[0]) {
+                            case 0x01:
+                                recordPayload = "http://www.";
+                                break;
+                            case 0x02:
+                                recordPayload = "https://www.";
+                                break;
+                            case 0x03:
+                                recordPayload = "http://";
+                                break;
+                            case 0x04:
+                                recordPayload = "https://";
+                                break;
+                            default:
+                                recordPayload = String((char*)payload);
+                                break;
+                        }
+                        recordPayload += String((char*)&payload[1]);
+                    } else {
+                        for (int k = 0; k < record.getPayloadLength(); k++) {
+                            recordPayload += (char)payload[k];
+                        }
                     }
-                    recordPayload += String((char*)&payload[1]);
-                } 
-                else 
-                {
-                    for (int i = 0; i < record.getPayloadLength(); i++) 
-                    {
-                        recordPayload += (char)payload[i];
+                    lnurlwNFC = recordPayload;
+                    String logMessage = "Record Payload: " + recordPayload;
+                    Serial.println(logMessage);
+                    if (isLnurlw()) {
+                        return true;
                     }
                 }
-                lnurlwNFC = recordPayload;
-                String logMessage = "Record Payload: " + recordPayload;
-                Serial.println(logMessage);
-                if (isLnurlw()) 
-                {
-                    return true;
+            }
+            readAttempts++;
+            if (readAttempts >= 6) {
+                setRFoff(true, pn532_i2c); // Switch off RF
+                if (isRfOff) {
+                    return false;
                 }
             }
         }
     }
+    
     lnurlwNFC = ""; // Reset the global variable if it's not lnurlw
-    readAttempts++;
-    if (readAttempts >= 12) 
-    {
-        setRFoff(true, pn532_i2c); // Switch off RF
-        if (isRfOff) 
-        {
-            return false;
-        }
-    }
     return false;
 }
 
@@ -447,7 +493,7 @@ void nfcTask(void *args)
                 // 'uid' will be populated with the UID, and uidLength will indicate
                 // if the uid is 4 bytes (Mifare Classic) or 7 bytes (Mifare Ultralight)
                 logger::write("[nfcTask] Checking for tag", "debug");
-                success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 200);
+                success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 420);
                 
                 if (success) {
                     // We seem to have a tag present
@@ -494,6 +540,7 @@ void nfcTask(void *args)
                         logger::write("[nfcTask] NFC card reading exited with failure", "debug");
                         screen::showNFCfailed();
                         lnurlwNFC = "";
+                        vTaskDelay(pdMS_TO_TICKS(1200));
                         xEventGroupClearBits(appEventGroup, (1<<0)); // NFC task is not actively processing
                     }
                     

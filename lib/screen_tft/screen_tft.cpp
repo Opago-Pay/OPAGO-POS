@@ -267,7 +267,7 @@ namespace screen_tft {
 		showStatusSymbols(power::getBatteryPercent());
 		const int16_t qr_max_w = screenWidth; 
 		const int16_t qr_max_h = tft.height() - statusSymbolsBBox.h; 
-		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted") {
+		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
 			// Adjusting the position and size of the QR code to prevent overlap with the text
 			int qrCodeOffsetY = 8; // Moving the QR code up
 			int qrCodeHeightAdjustment = 48; // Making the QR code smaller to prevent overlap
