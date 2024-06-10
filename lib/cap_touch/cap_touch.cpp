@@ -1,98 +1,124 @@
 #include "cap_touch.h"
 
 std::string getTouch() {
-    uint16_t lasttouched = 0;
     uint16_t currtouched = 0;
-    int8_t touched = -1; // Initialize to -1 to indicate no button is touched
     char button_values[12] = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'}; // Map buttons to their values
-    unsigned long debounceTime = 21; // Debounce time in milliseconds
-    unsigned long lastDebounceTime = 0; // the last time the output pin was toggled
+    unsigned long debounceTime = 50; // Increased debounce time in milliseconds
+    unsigned long startTime = millis(); // Record the start time of the function
 
-    int counter = 0;  // Counter to track the number of cycles without a button press
+    const int numSamples = 210; 
+    uint16_t touchSamples[numSamples] = {0};
+    int sampleIndex = 0;
 
-    while (counter < 1000) { // Loop until a button is pressed and released or the counter reaches the threshold
-        lasttouched = currtouched;
+    while (millis() - startTime < numSamples) { // Loop for 100ms
         currtouched = cap.touched();
-        if (currtouched) {
-            counter = 0;  // Reset the counter if a button is touched
+        touchSamples[sampleIndex] = currtouched;
+        sampleIndex = (sampleIndex + 1) % numSamples;
+
+        // Check if a button is released
+        if (currtouched == 0 && sampleIndex > 0) {
+            break;
         }
 
-        for (uint8_t i = 0; i < 12; i++) {
-            // if it *is* touched and *wasn't* touched before
-            if ((currtouched & _BV(i)) && !(lasttouched & _BV(i))) {
-                if (touched == -1) { // If no button is currently being tracked
-                    if ((millis() - lastDebounceTime) > debounceTime) { // If the button has been pressed for longer than the debounce time
-                        touched = i;
-                        Serial.print("Button "); Serial.print(button_values[i]); Serial.println(" touched");
-                        lastDebounceTime = millis();  // Update the last debounce time
-                    }
-                } else { // Another button was touched before the first one was released
-                    touched = -1; // Reset the tracking
-                    break; // Exit the loop
+        vTaskDelay(1 / portTICK_PERIOD_MS / 2); 
+    }
+
+    // Calculate the most likely touched button
+    int touchCounts[12] = {0};
+    bool touchedButtons[12] = {false}; // Track which buttons were touched
+    int differentButtonsTouched = 0; // Count of different buttons touched
+
+    for (int i = 0; i < sampleIndex; i++) {
+        for (uint8_t j = 0; j < 12; j++) {
+            if (touchSamples[i] & _BV(j)) {
+                touchCounts[j]++;
+                if (!touchedButtons[j]) {
+                    touchedButtons[j] = true;
+                    differentButtonsTouched++;
                 }
             }
         }
-        
-        // If no button is currently touched and we have a tracked button
-        if (currtouched == 0 && touched != -1) {
-            if ((millis() - lastDebounceTime) > debounceTime) { // If the button has been released for longer than the debounce time
-                Serial.print("Button "); Serial.print(button_values[touched]); Serial.println(" released");
-                return std::string(1, button_values[touched]);
-            }
-        }
-        
-        counter++;  // Increment the counter
-        delay(1); // Delay for 1 ms to match the counter threshold with the debounce time
     }
-    // If the counter reaches the threshold, return an empty string
-    return "";  
+
+    // If more than three different buttons were touched, ignore the output
+    if (differentButtonsTouched > 3) {
+        Serial.println("Interference detected, ignoring touch input");
+        return "";
+    }
+
+    int maxCount = 0;
+    int mostLikelyButton = -1;
+    for (int i = 0; i < 12; i++) {
+        if (touchCounts[i] > maxCount) {
+            maxCount = touchCounts[i];
+            mostLikelyButton = i;
+        }
+    }
+
+    if (mostLikelyButton != -1) {
+        Serial.print("Button "); Serial.print(button_values[mostLikelyButton]); Serial.println(" detected");
+        return std::string(1, button_values[mostLikelyButton]);
+    }
+
+    return ""; // If no button is detected, return an empty string
 }
 
 bool getLongTouch(char targetButton, unsigned long longTouchTime) {
-    uint16_t lasttouched = 0;
     uint16_t currtouched = 0;
-    int8_t touched = -1; // Initialize to -1 to indicate no button is touched
     char button_values[12] = {'1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'}; // Map buttons to their values
-    unsigned long lastDebounceTime = 0; // the last time the output pin was toggled
     unsigned long startTime = millis(); // Record the start time of the function
 
-    currtouched = cap.touched(); // Check if a button is already pressed when the function is called
-    for (uint8_t i = 0; i < 12; i++) {
-        if (currtouched & _BV(i)) { // If a button is already pressed
-            touched = i;
-            Serial.print("Button "); Serial.print(button_values[i]); Serial.println(" touched");
-            lastDebounceTime = millis();  // Update the last debounce time
-            break;
-        }
+    const int numSamples = longTouchTime / 10; // Number of samples to average over longTouchTime
+    uint16_t touchSamples[numSamples] = {0};
+    int sampleIndex = 0;
+
+    while (millis() - startTime < longTouchTime) { // Loop for the duration of longTouchTime
+        currtouched = cap.touched();
+        touchSamples[sampleIndex] = currtouched;
+        sampleIndex = (sampleIndex + 1) % numSamples;
+        vTaskDelay(10 / portTICK_PERIOD_MS); // Delay for 10 ms
     }
 
-    while (millis() - startTime <= 420) { // Loop to detect a button press
-        lasttouched = currtouched;
-        currtouched = cap.touched();
+    // Calculate the most likely touched button
+    int touchCounts[12] = {0};
+    bool touchedButtons[12] = {false}; // Track which buttons were touched
+    int differentButtonsTouched = 0; // Count of different buttons touched
 
-        for (uint8_t i = 0; i < 12; i++) {
-            // if it *is* touched and *wasn't* touched before
-            if ((currtouched & _BV(i)) && !(lasttouched & _BV(i))) {
-                if (touched == -1) { // If no button is currently being tracked
-                    touched = i;
-                    Serial.print("Button "); Serial.print(button_values[i]); Serial.println(" touched");
-                    lastDebounceTime = millis();  // Update the last debounce time
-                } else { // Another button was touched before the first one was released
-                    touched = -1; // Reset the tracking
-                    break; // Exit the loop
+    for (int i = 0; i < numSamples; i++) {
+        for (uint8_t j = 0; j < 12; j++) {
+            if (touchSamples[i] & _BV(j)) {
+                touchCounts[j]++;
+                if (!touchedButtons[j]) {
+                    touchedButtons[j] = true;
+                    differentButtonsTouched++;
                 }
             }
         }
-        
-        // If a button is currently touched and we have a tracked button
-        if (currtouched != 0 && touched != -1) {
-            if ((millis() - lastDebounceTime) >= longTouchTime) { // If the button has been pressed for longer than the long touch time
-                Serial.print("Button "); Serial.print(button_values[touched]); Serial.println(" long touched");
-                return button_values[touched] == targetButton;
-            }
-        }
-        
-        vTaskDelay(pdMS_TO_TICKS(1)); // Delay for 1 ms to match the counter threshold with the debounce time
     }
-    return false; // If no button press is detected within the first 210ms, return false
+
+    // If more than three different buttons were touched, ignore the output
+    if (differentButtonsTouched > 3) {
+        Serial.println("Interference detected, ignoring long touch input");
+        return false;
+    }
+
+    int maxCount = 0;
+    int mostLikelyButton = -1;
+    for (int i = 0; i < 12; i++) {
+        if (touchCounts[i] > maxCount) {
+            maxCount = touchCounts[i];
+            mostLikelyButton = i;
+        }
+    }
+
+    // Check if the most likely button is the target button and if it meets the 95% threshold
+    if (mostLikelyButton != -1 && button_values[mostLikelyButton] == targetButton) {
+        float requiredCount = numSamples * 0.9;
+        if (touchCounts[mostLikelyButton] >= requiredCount) {
+            Serial.print("Button "); Serial.print(button_values[mostLikelyButton]); Serial.println(" long touched");
+            return true;
+        }
+    }
+
+    return false; // If no button press is detected with high likelihood, return false
 }

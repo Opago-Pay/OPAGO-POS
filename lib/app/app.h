@@ -26,6 +26,7 @@ extern unsigned int sleepModeDelay;
 extern unsigned long lastActivityTime;
 extern bool isFakeSleeping;
 extern bool offlineMode;
+extern bool offlineOnly;
 
 void appendToKeyBuffer(const std::string &key);
 std::string leftTrimZeros(const std::string &keys);

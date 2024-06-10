@@ -46,22 +46,29 @@ bool isConnectedToWiFi() {
 }
 
 String scanForSSIDs() {
-    Serial.println("Scanning for SSIDs...");
-    DynamicJsonDocument doc(2048);
-    JsonArray ssids = doc.to<JsonArray>();
-
     int n = WiFi.scanNetworks();
+    DynamicJsonDocument doc(1024);
+    JsonArray ssidArray = doc.to<JsonArray>();
+
     for (int i = 0; i < n; ++i) {
-        ssids.add(WiFi.SSID(i));
+        ssidArray.add(WiFi.SSID(i));
     }
 
-    String output;
-    serializeJson(doc, output);
+    String result;
+    serializeJson(ssidArray, result);
 
-    return output;
+    // Delete scan results after we are done with them
+    WiFi.scanDelete();
+
+    return result;
 }
 
 void startAccessPoint() {
+    // Suspend the WiFi task to prevent conflicts while the AP is on
+    if(wifiTaskHandle != NULL) {
+        offlineOnly = true;
+    }
+
     WiFi.mode(WIFI_AP);
     uint32_t hash = 0;
     for (int i = 0; i < WiFi.macAddress().length(); ++i) {
@@ -76,18 +83,35 @@ void startAccessPoint() {
     dnsServer.start(53, "*", WiFi.softAPIP());
     Serial.println("DNS server started");
 
-    vTaskDelay(pdMS_TO_TICKS(210));
     startWebServer();
+}
+
+void stopAccessPoint() {
+    // Stop the DNS server
+    dnsServer.stop();
+    Serial.println("DNS server stopped");
+
+    // Stop the web server
+    if (serverStarted) {
+        server.end();
+        serverStarted = false;
+        Serial.println("Web server stopped.");
+    }
+
+    // Disconnect the soft AP
+    WiFi.softAPdisconnect(true);
+    Serial.println("AP Mode Stopped.");
+
+    // Resume the WiFi task if it was suspended
+    if(wifiTaskHandle != NULL) {
+        offlineOnly = false;
+        //vTaskResume(wifiTaskHandle);
+        //Serial.println("WiFi task resumed.");
+    }
 }
 
 void startWebServer() {
     if(!serverStarted) {
-        // Suspend the WiFi task to prevent conflicts while the web server is running
-        if(wifiTaskHandle != NULL) {
-            vTaskSuspend(wifiTaskHandle);
-            Serial.println("WiFi task suspended.");
-        }
-
         server.begin(); // Start the web server
         serverStarted = true;
         Serial.println("Web server started.");
@@ -121,9 +145,7 @@ void startWebServer() {
 
         // Serve the configuration page
         server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-            vTaskDelay(pdMS_TO_TICKS(1)); // add delays to reset timer
             String ssids = scanForSSIDs();
-            vTaskDelay(pdMS_TO_TICKS(1));
             String page = "<!DOCTYPE html><html><head><title>OPAGO POS Configuration</title><meta name='viewport' content='width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no'><meta name='apple-mobile-web-app-capable' content='yes'></head><body style='display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;'>"
                           "<div style='width: 100%; max-width: 600px;'>"
                           "<h2 style='text-align: center;'>OPAGO POS Configuration</h2>"
@@ -162,37 +184,21 @@ void startWebServer() {
             DynamicJsonDocument doc(1024);
             JsonObject configurations = doc.to<JsonObject>();
 
-            configurations["contrastLevel"] = request->arg("contrast").c_str();
-            configurations["logLevel"] = request->arg("logLevel").c_str();
-            String wifiSSID = request->arg("wifiSSIDCustom").isEmpty() ? request->arg("wifiSSID") : request->arg("wifiSSIDCustom");
-            String wifiSSID2 = request->arg("wifiSSID2Custom").isEmpty() ? request->arg("wifiSSID2") : request->arg("wifiSSID2Custom");
-            if(wifiSSID != "" && wifiSSID != "--select WIFI--") { // Check if a valid primary SSID is selected or entered
-                configurations["wifiSSID"] = wifiSSID.c_str();
-                configurations["wifiPwd"] = request->arg("wifiPwd").c_str();
-            }
-            if(wifiSSID2 != "" && wifiSSID2 != "--select WIFI--") { // Check if a valid secondary SSID is selected or entered
-                configurations["wifiSSID2"] = wifiSSID2.c_str();
-                configurations["wifiPwd2"] = request->arg("wifiPwd2").c_str();
-            }
+            configurations["contrastLevel"] = request->getParam("contrast", true)->value();
+            configurations["logLevel"] = request->getParam("logLevel", true)->value();
+            configurations["primarySSID"] = request->getParam("wifiSSID", true)->value();
+            configurations["primaryPassword"] = request->getParam("wifiPwd", true)->value();
+            configurations["secondarySSID"] = request->getParam("wifiSSID2", true)->value();
+            configurations["secondaryPassword"] = request->getParam("wifiPwd2", true)->value();
 
-            Serial.println("Saving configurations:");
-            for (JsonPair kv : configurations) {
-                Serial.printf("%s: %s\n", kv.key().c_str(), kv.value().as<String>().c_str());
-            }
+            // Save configurations to file or EEPROM
+            // saveConfigurations(configurations);
 
-            if (config::saveConfigurations(configurations)) {
-                Serial.println("Configurations saved successfully. Rebooting...");
-                ESP.restart();
-            } else {
-                Serial.println("Failed to save configurations");
-            }
-
-            // Resume the WiFi task 
-            if(wifiTaskHandle != NULL) {
-                vTaskResume(wifiTaskHandle);
-                Serial.println("WiFi task resumed.");
-            }
+            // Restart the device to apply new configurations
+            ESP.restart();
         });
+
+        // Handle other routes and functionalities as needed
     }
 }
 
@@ -341,16 +347,30 @@ void WiFiTask(void* pvParameters) {
     };
 
     connectionStartTime = millis(); // Start the connection timer
-    connectToBestNetwork(); // Initial connection attempt
 
-    // Once connected, maintain the connection
+    // Main task loop
     while (true) {
-        if (WiFi.status() != WL_CONNECTED) {
-            onlineStatus = false; // Update status to trigger reconnection
-            Serial.println("Connection lost. Attempting to reconnect...");
-            connectionStartTime = millis(); // Reset the connection timer
-            connectToBestNetwork(); // Attempt to reconnect
+        if (offlineOnly) {
+            // If offlineOnly is true, idle and wait for it to turn false
+            Serial.println("Offline mode enabled. Idling...");
+            while (offlineOnly) {
+                vTaskDelay(pdMS_TO_TICKS(420)); 
+            }
+            Serial.println("Offline mode disabled. Attempting to connect...");
         }
-        vTaskDelay(pdMS_TO_TICKS(10000)); // Check connection status every 10 seconds
+
+        // Attempt to connect to the best network
+        connectToBestNetwork();
+
+        // Once connected, maintain the connection
+        while (!offlineOnly) {
+            if (WiFi.status() != WL_CONNECTED) {
+                onlineStatus = false; // Update status to trigger reconnection
+                Serial.println("Connection lost. Attempting to reconnect...");
+                connectionStartTime = millis(); // Reset the connection timer
+                connectToBestNetwork(); // Attempt to reconnect
+            }
+            vTaskDelay(pdMS_TO_TICKS(10000)); // Check connection status every 10 seconds
+        }
     }
 }

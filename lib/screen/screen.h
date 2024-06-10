@@ -18,6 +18,7 @@ namespace screen {
 	void showNFCsuccess();
 	void showSuccess();
 	void showSand();
+	void showMenu();
 	void showEnterAmountScreen(const double &amount);
 	void showPaymentQRCodeScreen(const std::string &qrcodeData);
 	void showPaymentPinScreen(const std::string &pin);

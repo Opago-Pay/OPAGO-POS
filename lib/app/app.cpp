@@ -70,9 +70,18 @@ void handleSleepMode() {
 void appTask(void* pvParameters) {
     Serial.println("App task started");
     screen::showHomeScreen();
+    screen::showStatusSymbols(power::getBatteryPercent());
+    vTaskDelay(pdMS_TO_TICKS(420));
+    static unsigned long lastPopTime = 0;
+    static int popCount = 0;
+    static unsigned long lastUpdate = 0;
     int signal;
     while(1) {
         power::loop();
+        if (millis() - lastUpdate > 2100) {
+            screen::showStatusSymbols(power::getBatteryPercent());
+            lastUpdate = millis();
+        }
         //handleSleepMode();
         if (!jsonRpc::hasPinConflict() || !jsonRpc::inUse()) {
             logger::loop();
@@ -113,7 +122,23 @@ void appTask(void* pvParameters) {
             if (keyPressed == "") {
                 // Do nothing.
             } else if (keyPressed == "*") {
-                keysBuffer = "";
+                unsigned long currentTime = millis();
+
+                if (!keysBuffer.empty()) {
+                    keysBuffer.pop_back(); // Remove the last digit from the buffer
+                    popCount++;
+                }
+
+                if (currentTime - lastPopTime > 1000) {
+                    popCount = 0; 
+                }
+
+                if (popCount > 1) { 
+                    keysBuffer.clear(); 
+                    popCount = 0; 
+                }
+
+                lastPopTime = currentTime;
                 screen::showEnterAmountScreen(keysToAmount(keysBuffer));
             } else if (keyPressed == "#") {
                 amount = keysToAmount(keysBuffer);
@@ -135,7 +160,6 @@ void appTask(void* pvParameters) {
                     if (onlineStatus) {
                         //if WiFi is connected, we can fetch the invoice from the server
                         screen::showSand();
-                        screen::showStatusSymbols(power::getBatteryPercent());
                         std::string paymentHash = "";
                         bool paymentMade = false;
                         qrcodeData = requestInvoice(signedUrl);
@@ -143,7 +167,6 @@ void appTask(void* pvParameters) {
                             keysBuffer = "";
                             logger::write("Server connection failed. Falling back to offline mode.");
                             offlineMode = true;
-                            screen::showStatusSymbols(power::getBatteryPercent());
                             screen::showPaymentQRCodeScreen(qrcodeDatafallback);
                             logger::write("Payment request shown: \n" + signedUrl);
                             logger::write("QR Code data: \n" + qrcodeDatafallback, "debug");
@@ -182,10 +205,38 @@ void appTask(void* pvParameters) {
                         logger::write("QR Code data: \n" + qrcodeData, "debug");
                     }
                 } else {
-                    // Check if the device is connected to WiFi
-                    if (!isConnectedToWiFi()) {
-                        startAccessPoint();
-                        logger::write("Access Point started.");
+                    // Show the menu screen
+                    screen::showMenu();
+
+                    // Wait for user input
+                    while (true) {
+                        std::string keyPressed = keypad::getPressedKey(); // Assume getKeyPressed() is a function that returns the key pressed
+
+                        if (keyPressed == "1") {
+                            if (WiFi.getMode() != WIFI_AP) {
+                                screen::showEnterAmountScreen(0);
+                                startAccessPoint();
+                                logger::write("Access Point started.");
+                            } else {
+                                screen::showEnterAmountScreen(0);
+                                stopAccessPoint();
+                                offlineMode = false;
+                                logger::write("Access Point stopped.");
+                            }
+                            break; // Exit the loop after handling the key press
+                        } else if (keyPressed == "2") {
+                            // Toggle the offlineOnly flag
+                            offlineOnly = !offlineOnly;
+                            onlineStatus = false;
+                            logger::write("offlineOnly flag toggled to: " + std::to_string(offlineOnly));
+                            screen::showEnterAmountScreen(0);
+                            break; // Exit the loop after handling the key press
+                        } else if (keyPressed == "*") {
+                            // Exit the loop if 'x' is pressed
+                            screen::showEnterAmountScreen(0);
+                            break;
+                        }
+                        vTaskDelay(pdMS_TO_TICKS(50)); // Check for input every 50ms
                     }
                 }
             } else if (keysBuffer.size() < maxNumKeysPressed) {
@@ -252,10 +303,6 @@ void appTask(void* pvParameters) {
                 }
             }
         }
-        screen::showStatusSymbols(power::getBatteryPercent());
-        //UBaseType_t uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
-        //Serial.print("High water mark App Main Loop: ");
-        //Serial.println(uxHighWaterMark);
         taskYIELD();
     } 
 } 

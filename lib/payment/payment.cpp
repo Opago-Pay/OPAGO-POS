@@ -238,12 +238,13 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
     // Initialize variables
     paymentisMade = false;
     bool keyPressed = false;
+    static unsigned long lastUpdate = 0;
     lastRenderedQRCode = millis();
     EventBits_t uxBits;
     const EventBits_t uxAllBits = ( 1 << 0 ) | ( 1 << 1 );
 
     //decrease sensitivity to prevent interference
-    cap.setThresholds(10, 5); //configure sensitivity
+    cap.setThresholds(5, 5); //configure sensitivity
 
     // Resume NFC task and tell it to turn on
     vTaskResume(nfcTaskHandle); // Resume the NFC task
@@ -252,6 +253,10 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
 
     // Main loop: wait for payment or cancellation
     while (!paymentisMade) {
+        if (millis() - lastUpdate > 2100) {
+            screen::showStatusSymbols(power::getBatteryPercent());
+            lastUpdate = millis();
+        }
         // Wait for bits from appEventGroup
         uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(210));
         // Handle the received bits
@@ -271,10 +276,30 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
             paymentisMade = isPaymentMade(paymentHash, apiKey);
             if (!paymentisMade) {
                 logger::write("[payment] Checking for user cancellation or contrast adjustment", "debug");
-                keyPressed = getLongTouch('*', 42); // Check for cancellation
-                if (keyPressed) {
-                    logger::write("[payment] Payment cancelled by user.", "info");
-                    return false;
+                // Check for cancellation unless nfcSuccess or x screens are showing
+                if (screen::getCurrentScreen() != "nfcSuccess" && screen::getCurrentScreen() != "x") {
+                    keyPressed = getLongTouch('*', 210); // Check for cancellation
+                    if (keyPressed) {
+                        logger::write("[payment] Payment cancelled by user.", "info");
+                        screen::showX();
+                        // Ensure NFC shutdown before exiting
+                        xEventGroupClearBits(nfcEventGroup, (1 << 0)); // Clear power up bit
+                        xEventGroupSetBits(nfcEventGroup, (1 << 1)); // Set turn off bit
+                        for (int i = 0; i < 10; ++i) { // Attempt confirmation up to 10 times
+                            uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
+                            if ((uxBits & (1 << 1)) != 0) {
+                                vTaskSuspend(nfcTaskHandle); // Suspend the NFC task
+                                break;
+                            } else {
+                                vTaskDelay(pdMS_TO_TICKS(500)); // Short delay before retry
+                            }
+                        }
+                        if ((uxBits & (1 << 1)) == 0) {
+                            logger::write("[payment] Failed to confirm NFC shutdown, restarting ESP.", "error");
+                            ESP.restart();
+                        }
+                        return false;
+                    }
                 }
                 // Check for contrast adjustment
                 std::string contrastKey = getTouch(); 
@@ -323,7 +348,7 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
 
     logger::write("[payment] Returning to App Loop", "debug");
     //increase sensitivity again
-    cap.setThresholds(5, 5); //configure sensitivity
+    cap.setThresholds(3, 5); //configure sensitivity
     connectionLoss = false; //reset flag
     return paymentisMade;
 }

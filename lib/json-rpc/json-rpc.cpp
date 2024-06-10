@@ -175,25 +175,50 @@ namespace {
 				serializeJson(docOut, Serial);
 				Serial.println();
 			} else if (method == "scanSSIDs") {
+				// Ensure WiFi is in the correct mode before scanning
+				WiFi.mode(WIFI_STA);
+				WiFi.disconnect();
+				delay(100); // Short delay to ensure the WiFi adapter is ready
+
 				DynamicJsonDocument docOut(2048);
 				docOut["jsonrpc"] = jsonRpcVersion;
 				docOut["id"] = id;
-				docOut["result"] = scanForSSIDs();
+
+				// Scan for SSIDs
+				String ssids = scanForSSIDs();
+
+				Serial.println("scanForSSIDs() returned: " + ssids); // Log the raw SSIDs string
+
+				if (!ssids.isEmpty() && ssids != "[]") { // Check if SSIDs are not empty and not an empty array
+					// Deserialize the SSIDs string into a JSON array
+					DynamicJsonDocument ssidArray(2048);
+					DeserializationError error = deserializeJson(ssidArray, ssids);
+					if (error) {
+						Serial.print("Deserialization Error: ");
+						Serial.println(error.c_str());
+						docOut["error"] = "Failed to parse SSIDs";
+					} else {
+						docOut["result"] = ssidArray;
+					}
+				} else {
+					docOut["error"] = "Failed to scan SSIDs or no SSIDs available";
+				}
+
 				serializeJson(docOut, Serial);
 				Serial.println();
 			} else if (method == "pauseWifiTask") {
+				DynamicJsonDocument docOut(512);
+				docOut["jsonrpc"] = jsonRpcVersion;
+				docOut["id"] = id;
 				if (wifiTaskHandle != NULL) {
 					vTaskSuspend(wifiTaskHandle);
 					logger::write("WiFi task paused successfully.");
-					DynamicJsonDocument docOut(512);
-					docOut["jsonrpc"] = jsonRpcVersion;
-					docOut["id"] = id;
 					docOut["result"] = "WiFi task paused successfully.";
-					serializeJson(docOut, Serial);
-					Serial.println();
 				} else {
-					throw JsonRpcError("WiFi task handle is NULL. Cannot pause WiFi task.");
+					docOut["error"] = "WiFi task handle is NULL. Cannot pause WiFi task.";
 				}
+				serializeJson(docOut, Serial);
+				Serial.println();
 			} else {
 				throw JsonRpcError("Unknown method");
 			}
@@ -260,6 +285,13 @@ namespace jsonRpc {
 			logger::write("JSON-RPC serial interface now listening...");
 		}
 		initTime = millis();
+		
+		// Ensure WiFi is initialized
+		if (WiFi.status() == WL_NO_SHIELD) {
+			logger::write("WiFi shield not present", "error");
+		} else {
+			logger::write("WiFi shield present");
+		}
 	}
 
 	void loop() {

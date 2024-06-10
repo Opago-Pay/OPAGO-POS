@@ -107,7 +107,7 @@ void setRFoff(bool turnOff, PN532_I2C* pn532_i2c) {
         if (pn532_i2c->writeCommand(commandRFon, sizeof(commandRFon)) == 0) {
             // If RF is successfully turned on, clear the flag
             logger::write("[nfcTask] RF is on", "debug");
-            setRFPower(pn532_i2c, 210); //increase power to max
+            setRFPower(pn532_i2c, 190); //increase power to max
             isRfOff = false;
         } else {
             logger::write("[nfcTask] Error powering up RF", "debug");
@@ -214,7 +214,8 @@ void scanDevices(TwoWire *w)
 
 bool isLnurlw(void) {
     logger::write("[nfcTask] Checking if URL is lnurlw", "info");
-    // Check if lnurlwNFC starts with "lnurlw", "lnurl", "lnurlp", "lightning", or is a bech32-encoded LNURL
+
+    // Check if lnurlwNFC starts with "lnurlw:", "lnurl:", "lnurlp:", "lightning:", or is a bech32-encoded LNURL
     if (lnurlwNFC.startsWith("lnurlw:")) {
         String rest = lnurlwNFC.substring(7);
         if (rest.startsWith("http") || rest.startsWith("https")) {
@@ -222,7 +223,7 @@ bool isLnurlw(void) {
         } else if (rest.startsWith("//")) {
             lnurlwNFC.replace("lnurlw://", "https://");
         } else {
-            if (rest.startsWith("lnurl")) {
+            if (rest.startsWith("lnurl") || rest.startsWith("LNURL")) {
                 lnurlwNFC = String(Lnurl::decode(rest.c_str()).c_str());
             } else {
                 return false;
@@ -235,7 +236,7 @@ bool isLnurlw(void) {
         } else if (rest.startsWith("//")) {
             lnurlwNFC.replace("lnurl://", "https://");
         } else {
-            if (rest.startsWith("lnurl")) {
+            if (rest.startsWith("lnurl") || rest.startsWith("LNURL")) {
                 lnurlwNFC = String(Lnurl::decode(rest.c_str()).c_str());
             } else {
                 return false;
@@ -251,7 +252,7 @@ bool isLnurlw(void) {
         } else if (rest.startsWith("//")) {
             lnurlwNFC.replace("lightning://", "https://");
         } else {
-            if (rest.startsWith("lnurl")) {
+            if (rest.startsWith("lnurl") || rest.startsWith("LNURL")) {
                 lnurlwNFC = String(Lnurl::decode(rest.c_str()).c_str());
             } else {
                 // Handle bech32-encoded LNURL prefixed with "lightning:"
@@ -264,7 +265,8 @@ bool isLnurlw(void) {
     } else if (lnurlwNFC.startsWith("http") && !lnurlwNFC.startsWith("https")) {
         lnurlwNFC.replace("http", "https");
     }
-    // Check if the URL starts with "https://" 
+
+    // Check if the URL starts with "https://"
     if (lnurlwNFC.startsWith("https://")) {
         logger::write("[nfcTask] URL is lnurlw", "info");
         screen::showNFCsuccess();
@@ -297,6 +299,64 @@ void idleMode(PN532_I2C *pn532_i2c)
         }
         vTaskDelay(pdMS_TO_TICKS(420)); 
     }
+}
+
+bool sendQRCodeToPhone(PN532_I2C* pn532_i2c, const String& qrcodeData) {
+    // Set the PN532 to card emulation mode
+    uint8_t command[] = {0x8C, 0x00}; // TgInitAsTarget command
+    uint8_t response[256]; // Buffer to hold the response
+    int result = pn532_i2c->writeCommand(command, sizeof(command), response, (uint16_t)sizeof(response));
+
+    if (result == 0) {
+        logger::write("PN532 set to card emulation mode", "debug");
+
+        // Prepare the NDEF message with the QR code data
+        uint8_t ndefMessage[512]; // Increase the buffer size to accommodate longer data
+        int ndefMessageLength = 0;
+
+        // Add the NDEF message header
+        ndefMessage[ndefMessageLength++] = 0x03; // NDEF message flag
+        ndefMessage[ndefMessageLength++] = 0x00; // NDEF message length (placeholder)
+
+        // Add the NDEF record header
+        ndefMessage[ndefMessageLength++] = 0x01; // NDEF record header (TNF=0x01:Well-known record, SR=1:Short record)
+        ndefMessage[ndefMessageLength++] = 0x01; // NDEF record type length
+        ndefMessage[ndefMessageLength++] = 'T'; // NDEF record type (Text)
+        ndefMessage[ndefMessageLength++] = qrcodeData.length(); // NDEF record payload length
+
+        // Add the NDEF record payload (QR code data)
+        memcpy(ndefMessage + ndefMessageLength, qrcodeData.c_str(), qrcodeData.length());
+        ndefMessageLength += qrcodeData.length();
+
+        // Update the NDEF message length
+        ndefMessage[1] = ndefMessageLength - 2;
+
+        // Set the NDEF message for the emulated tag
+        uint8_t setDataCommand[512] = {0x8E, 0x00, 0x00, 0x00}; // TgSetData command
+        memcpy(setDataCommand + 2, ndefMessage, ndefMessageLength);
+        result = pn532_i2c->writeCommand(setDataCommand, ndefMessageLength + 2, response, (uint16_t)sizeof(response));
+
+        if (result == 0) {
+            logger::write("NDEF message set for emulated tag", "debug");
+
+            // Set the emulated tag to be a generic NFC tag
+            uint8_t tagTypeCommand[] = {0x8C, 0x02, 0x00, 0x00}; // TgInitAsTarget command with generic target parameters
+            result = pn532_i2c->writeCommand(tagTypeCommand, sizeof(tagTypeCommand), response, (uint16_t)sizeof(response));
+
+            if (result == 0) {
+                logger::write("Emulated tag set as generic NFC tag", "debug");
+                return true;
+            } else {
+                logger::write("Failed to set emulated tag as generic NFC tag", "debug");
+                return false;
+            }
+        } else {
+            logger::write("Failed to set NDEF message for emulated tag", "debug");
+            return false;
+        }
+    }
+
+    return false;
 }
 
 bool readAndProcessNFCData(PN532_I2C *pn532_i2c, PN532 *pn532, Adafruit_PN532 *nfc, NfcAdapter *nfcAdapter, int &readAttempts)
@@ -488,7 +548,7 @@ void nfcTask(void *args)
                     xEventGroupClearBits(appEventGroup, (1<<0)); // NFC task is not actively processing
                     break;
                 }
-                  
+
                 // Wait for an ISO14443A type cards (Mifare, etc.). When one is found
                 // 'uid' will be populated with the UID, and uidLength will indicate
                 // if the uid is 4 bytes (Mifare Classic) or 7 bytes (Mifare Ultralight)
@@ -548,6 +608,12 @@ void nfcTask(void *args)
                 }
                 else 
                 {
+                    // No card detected, listen for phone commands and send QR code data
+                    if (sendQRCodeToPhone(pn532_i2c, qrcodeData.c_str())) {
+                        logger::write("QR code data sent to phone successfully", "debug");
+                    } else {
+                        logger::write("Failed to send QR code data to phone", "debug");
+                    }
                     vTaskDelay(pdMS_TO_TICKS(100));
                 }
             }     

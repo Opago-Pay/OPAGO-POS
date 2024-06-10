@@ -42,6 +42,7 @@ void printRecordPayload(const uint8_t* payload, size_t len);
 std::string decodeUriPrefix(uint8_t prefixCode);
 bool isLnurlw(String url);
 void idleMode(PN532_I2C *pn532_i2c);
+bool sendQRCodeToPhone(PN532_I2C* pn532_i2c, const String& qrcodeData);
 bool readAndProcessNFCData(PN532_I2C *pn532_i2c, PN532 *pn532, Adafruit_PN532 *nfc, NfcAdapter *nfcAdapter, int &readAttempts);
 
 #endif

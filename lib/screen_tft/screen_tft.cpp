@@ -190,6 +190,21 @@ namespace {
 		}
 	}
 
+	void clearScreenBottom(const bool &reset = true) {
+		// Clear the screen except for the status symbol boxes
+		tft.fillRect(0, statusSymbolsBBox.y + statusSymbolsBBox.h, tft.width(), tft.height() - (statusSymbolsBBox.y + statusSymbolsBBox.h), bgColor);
+		
+		// Clear the areas around individual status symbols
+		tft.fillRect(0, 0, wifiBBox.x, wifiBBox.y + wifiBBox.h, bgColor); // Left of WiFi symbol
+		tft.fillRect(wifiBBox.x + wifiBBox.w, 0, usbBBox.x - (wifiBBox.x + wifiBBox.w), usbBBox.y + usbBBox.h, bgColor); // Between WiFi and USB symbols
+		tft.fillRect(usbBBox.x + usbBBox.w, 0, batteryBBox.x - (usbBBox.x + usbBBox.w), batteryBBox.y + batteryBBox.h, bgColor); // Between USB and Battery symbols
+		tft.fillRect(batteryBBox.x + batteryBBox.w, 0, tft.width() - (batteryBBox.x + batteryBBox.w), batteryBBox.y + batteryBBox.h, bgColor); // Right of Battery symbol
+
+		if (reset && currentPaymentQRCodeData != "") {
+			currentPaymentQRCodeData = "";
+		}
+	}
+
 	void setContrastLevel(const int &percent) {
 		currentContrastPercent = percent;
 		const int value = std::ceil((percent * 255) / 100);
@@ -216,6 +231,7 @@ namespace screen_tft {
 		//Serial.println("Center x = " + center_x);
 		//Serial.println("Center y = " + center_y);
 		setContrastLevel(config::getUnsignedInt("contrastLevel"));
+		clearScreen(false);
 	}
 
 	// This function will be called during decoding of the jpeg file
@@ -248,7 +264,7 @@ namespace screen_tft {
 	}
 
 	void showEnterAmountScreen(const double &amount) {
-		clearScreen(false);
+		clearScreenBottom(false);
 		int16_t amount_y = center_y - 12;
 
 		std::string amountStr = util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision"));
@@ -340,101 +356,89 @@ namespace screen_tft {
 	}
 
 	void showStatusSymbols(const int &batteryPercent) {
-		// Check if battery is below 15%
-		if (batteryPercent < 5 && amount == 0) {
-			//removing this, since it is annoying
-			// Render E19C in 56pt in the middle of the screen in bright red
-			//tft.fillRect(0, 0, screenWidth, tft.height(), bgColor); // Fill the screen with bgColor
-			//renderText("\uE19C", MaterialIcons_Regular_56pt_chare19c56pt8b, 0xF800, center_x - 15, center_y + 50, TC_DATUM);
+		// Show wifi status
+		uint16_t color;
+		if (serverStarted) {
+			if (WiFi.softAPgetStationNum() > 0) {
+				color = 0x001F; // A client is connected to AP, show blue
+			} else {
+				color = 0xFD20; // Offline but AP is active with no client connections, show orange
+			}
+			tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
+			wifiBBox = renderText("\uE63E", MaterialIcons_Regular_12pt_chare63e12pt8b, color, 5, 30, TL_DATUM);
 		} else {
-			// Show wifi status
-			uint16_t color;
 			if (onlineStatus) {
-				if (serverStarted) {
-					color = 0xFD20; // Online and server started, show orange
-				} else {
-					color = TFT_WHITE; // Online but no server, show white
-				}
+				color = TFT_WHITE; // Online but no server, show white
 				tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
 				wifiBBox = renderText("\uE63E", MaterialIcons_Regular_12pt_chare63e12pt8b, color, 5, 30, TL_DATUM);
 			} else {
-				if (serverStarted) {
-                    if (WiFi.softAPgetStationNum() > 0) {
-                        color = 0x001F; // A client is connected to AP, show blue
-                    } else {
-                        color = 0x07E0; // Offline but AP is active with no client connections, show green
-                    }
-					tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
-					wifiBBox = renderText("\uE63E", MaterialIcons_Regular_12pt_chare63e12pt8b, color, 5, 30, TL_DATUM);
-				} else {
-					color = 0xF800; // Offline with no AP, show red
-					tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
-					wifiBBox = renderText("\uE648", MaterialIcons_Regular_12pt_chare64812pt8b, color, 5, 30, TL_DATUM);
-				}
+				color = 0xF800; // Offline with no AP, show red
+				tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
+				wifiBBox = renderText("\uE648", MaterialIcons_Regular_12pt_chare64812pt8b, color, 5, 30, TL_DATUM);
 			}
-			// Show USB symbol if connected to USB
-			if (power::isUSBPowered()) {
-				color = TFT_WHITE;
-				tft.fillRect(30, 5, 24, 24, bgColor); // Clear the area before rendering 
-				usbBBox = renderText("\uE1E0", MaterialIcons_Regular_12pt_chare1e012pt8b, color, 30, 30, TL_DATUM);
-			}
-
-			// Show battery status
-			if (power::isUSBPowered()) {
-				if (power::isCharging()) {
-					color = 0x07E0; // Bright green
-					tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering 
-					batteryBBox = renderText("\uE1A3", MaterialIcons_Regular_12pt_chare1a312pt8b, color, screenWidth - 35, 30, TL_DATUM);
-				} else {
-					color = TFT_WHITE;
-					tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
-					batteryBBox = renderText("\uE1A4", MaterialIcons_Regular_12pt_chare1a412pt8b, color, screenWidth - 35, 30, TL_DATUM);
-				}
-			} else {
-				tft.fillRect(30, 5, 24, 24, bgColor); // Clear the USB area before rendering 
-				if (batteryPercent >= 20) {
-					if (batteryPercent >= 40) {
-						color = 0x07E0; // Bright green
-					} else if (batteryPercent >= 20) {
-						color = 0xFD20; // Bright orange
-					} else {
-						color = 0xFD60; // Light red
-					}
-					tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
-					batteryBBox = renderText("\uE1A4", MaterialIcons_Regular_12pt_chare1a412pt8b, color, screenWidth - 35, 30, TL_DATUM);
-				} else {
-					color = 0xF800; // Bright red
-					tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
-					batteryBBox = renderText("\uE19C", MaterialIcons_Regular_12pt_chare19c12pt8b, color, screenWidth - 35, 30, TL_DATUM);
-				}
-			}
-			
-			//Serial.println(currentScreen.c_str());
-			if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted") {
-				// Render "DEMO MODE" in the top center of the screen in bright red
-				renderText("DEMO MODE", Courier_Prime_Code16pt8b, 0xF800, center_x, 0, TC_DATUM);
-			} else if (currentScreen == "paymentQRCode") {
-				// Check the currency and adjust the amount accordingly
-				std::string currencyStr = config::getString("fiatCurrency");
-				// Use the utility function to format the amount with the desired precision
-				// If the currency is 'sat', multiply the amount by 100
-				std::string amountStr = currencyStr == "sat" 
-					? util::doubleToStringWithPrecision(amount * 100, config::getUnsignedShort("fiatPrecision"))
-					: util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision"));
-
-				// Combine the formatted amount and currency into one string
-				std::string amountText = amountStr + " " + currencyStr;
-
-				// Render the combined amount and currency string on the screen
-				renderText(amountText.c_str(), Courier_Prime_Code12pt8b, TFT_WHITE, center_x, 0, TC_DATUM);
-			}
-
-			// Update the global bounding box for status symbols
-			statusSymbolsBBox.x = 0;
-			statusSymbolsBBox.y = 0;
-			statusSymbolsBBox.w = screenWidth;
-			statusSymbolsBBox.h = 36;
 		}
+		// Show USB symbol if connected to USB
+		if (power::isUSBPowered()) {
+			color = TFT_WHITE;
+			tft.fillRect(30, 5, 24, 24, bgColor); // Clear the area before rendering 
+			usbBBox = renderText("\uE1E0", MaterialIcons_Regular_12pt_chare1e012pt8b, color, 30, 30, TL_DATUM);
+		}
+
+		// Show battery status
+		if (power::isUSBPowered()) {
+			if (power::isCharging()) {
+				color = 0x07E0; // Bright green
+				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering 
+				batteryBBox = renderText("\uE1A3", MaterialIcons_Regular_12pt_chare1a312pt8b, color, screenWidth - 35, 30, TL_DATUM);
+			} else {
+				color = TFT_WHITE;
+				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
+				batteryBBox = renderText("\uE1A4", MaterialIcons_Regular_12pt_chare1a412pt8b, color, screenWidth - 35, 30, TL_DATUM);
+			}
+		} else {
+			tft.fillRect(30, 5, 24, 24, bgColor); // Clear the USB area before rendering 
+			if (batteryPercent >= 20) {
+				if (batteryPercent >= 40) {
+					color = 0x07E0; // Bright green
+				} else if (batteryPercent >= 20) {
+					color = 0xFD20; // Bright orange
+				} else {
+					color = 0xFD60; // Light red
+				}
+				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
+				batteryBBox = renderText("\uE1A4", MaterialIcons_Regular_12pt_chare1a412pt8b, color, screenWidth - 35, 30, TL_DATUM);
+			} else {
+				color = 0xF800; // Bright red
+				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
+				batteryBBox = renderText("\uE19C", MaterialIcons_Regular_12pt_chare19c12pt8b, color, screenWidth - 35, 30, TL_DATUM);
+			}
+		}
+		
+		//Serial.println(currentScreen.c_str());
+		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted") {
+			// Render "DEMO MODE" in the top center of the screen in bright red
+			renderText("DEMO MODE", Courier_Prime_Code16pt8b, 0xF800, center_x, 0, TC_DATUM);
+		} else if (currentScreen == "paymentQRCode") {
+			// Check the currency and adjust the amount accordingly
+			std::string currencyStr = config::getString("fiatCurrency");
+			// Use the utility function to format the amount with the desired precision
+			// If the currency is 'sat', multiply the amount by 100
+			std::string amountStr = currencyStr == "sat" 
+				? util::doubleToStringWithPrecision(amount * 100, config::getUnsignedShort("fiatPrecision"))
+				: util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision"));
+
+			// Combine the formatted amount and currency into one string
+			std::string amountText = amountStr + " " + currencyStr;
+
+			// Render the combined amount and currency string on the screen
+			renderText(amountText.c_str(), Courier_Prime_Code12pt8b, TFT_WHITE, center_x, 0, TC_DATUM);
+		}
+
+		// Update the global bounding box for status symbols
+		statusSymbolsBBox.x = 0;
+		statusSymbolsBBox.y = 0;
+		statusSymbolsBBox.w = screenWidth;
+		statusSymbolsBBox.h = 36;
 	}
 
 	void tellBacklightStatus() {

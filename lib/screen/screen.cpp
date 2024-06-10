@@ -60,6 +60,13 @@ namespace screen {
 		logger::write("Current Screen " + getCurrentScreen(), "debug");
 	}
 
+	void showMenu() {
+		logger::write("Show screen: Menu", "debug");
+		screen_tft::renderJPEG("/menu.jpg", 0, 0, 1);
+		currentScreen = "menu";
+		logger::write("Current Screen " + getCurrentScreen(), "debug");
+	}
+
 	void showEnterAmountScreen(const double &amount) {
 		logger::write("Show screen: Enter Amount", "debug");
 		screen_tft::showEnterAmountScreen(amount);
