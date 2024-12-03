@@ -13,8 +13,6 @@
 #include "TFT_eSPI.h"
 #include "TJpg_Decoder.h"
 
-#include "opago_wifi.h"
-
 #include <cmath>
 #include <stdexcept>
 #include <string>

@@ -3,21 +3,20 @@
 namespace {
 
 	const std::map<const char*, const char*> defaultValues = {
-		{"apiKey.key", "BueokH4o3FmhWmbvqyqLKz"},
-		//{"callbackUrl", "https://api.opago-pay.com/lnurldevice/api/v1/lnurl/atEoo"},
+		{"apiKey.key", "jmZTATdju6UQqcysY6Jspu"},
+		//{"callbackUrl", "https://api.opago-pay.com/lnurldevice/api/v1/lnurl/GEVvH"},
 		{"callbackUrl", "https://opago-pay.com/getstarted"},
 		{"fiatCurrency", "EUR"},
 		{"fiatPrecision", "2"},
 		{"tftRotation", "3"},
 		{"batteryMaxVolts", "4.2"},
 		{"batteryMinVolts", "3.2"},
-		{"contrastLevel", "75"},
+		{"contrastLevel", "80"},
 		{"logLevel", "info"},
-		{"wifiSSID","Zitadelle2024"},
-		{"wifiPwd","Satoshi21!"},
-		{"wifiSSID2",""},
-		{"wifiPwd2",""},
-		{"tax","false"}
+		{"wifiSSID",""},
+		{"wifiPwd",""},
+		{"nfcEnabled", "false"},
+		{"offlineMode", "false"},
 	};
 
 	// https://arduinojson.org/v6/api/dynamicjsondocument/

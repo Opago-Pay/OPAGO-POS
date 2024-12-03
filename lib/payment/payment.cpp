@@ -243,13 +243,16 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
     EventBits_t uxBits;
     const EventBits_t uxAllBits = ( 1 << 0 ) | ( 1 << 1 );
 
-    //decrease sensitivity to prevent interference
-    cap.setThresholds(5, 5); //configure sensitivity
+    // Only configure NFC if it's enabled
+    if (config::getBool("nfcEnabled")) {
+        //decrease sensitivity to prevent interference
+        cap.setThresholds(5, 5); //configure sensitivity
 
-    // Resume NFC task and tell it to turn on
-    vTaskResume(nfcTaskHandle); // Resume the NFC task
-    xEventGroupClearBits(nfcEventGroup, (1 << 1)); // Clear turn off bit
-    xEventGroupSetBits(nfcEventGroup, (1 << 0)); // Set power up bit
+        // Resume NFC task and tell it to turn on
+        vTaskResume(nfcTaskHandle);
+        xEventGroupClearBits(nfcEventGroup, (1 << 1));
+        xEventGroupSetBits(nfcEventGroup, (1 << 0));
+    }
 
     // Main loop: wait for payment or cancellation
     while (!paymentisMade) {
@@ -257,98 +260,79 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
             screen::showStatusSymbols(power::getBatteryPercent());
             lastUpdate = millis();
         }
-        // Wait for bits from appEventGroup
-        uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(210));
-        // Handle the received bits
-        if ((uxBits & (1 << 0)) != 0) { //card has been detected
-            logger::write("[payment] Checking if paid. No cancel check.", "info");
-            paymentisMade = isPaymentMade(paymentHash, apiKey);
-            vTaskDelay(pdMS_TO_TICKS(2100));
-            continue;
-        } else { //no card detected
-            // Check if NFC task is not actively processing
-            if ((uxBits & (1 << 0)) == 0 && screen::getCurrentScreen() != "paymentQRCode") {
-                // Display the payment QR code
-                screen::showPaymentQRCodeScreen(qrcodeData);
-                lastRenderedQRCode = millis();
-            }
-            logger::write("[payment] Checking if paid.", "info");
-            paymentisMade = isPaymentMade(paymentHash, apiKey);
-            if (!paymentisMade) {
-                logger::write("[payment] Checking for user cancellation or contrast adjustment", "debug");
-                // Check for cancellation unless nfcSuccess or x screens are showing
-                if (screen::getCurrentScreen() != "nfcSuccess" && screen::getCurrentScreen() != "x") {
-                    keyPressed = getLongTouch('*', 210); // Check for cancellation
-                    if (keyPressed) {
-                        logger::write("[payment] Payment cancelled by user.", "info");
-                        screen::showX();
-                        // Ensure NFC shutdown before exiting
-                        xEventGroupClearBits(nfcEventGroup, (1 << 0)); // Clear power up bit
-                        xEventGroupSetBits(nfcEventGroup, (1 << 1)); // Set turn off bit
-                        for (int i = 0; i < 10; ++i) { // Attempt confirmation up to 10 times
-                            uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
-                            if ((uxBits & (1 << 1)) != 0) {
-                                vTaskSuspend(nfcTaskHandle); // Suspend the NFC task
-                                break;
-                            } else {
-                                vTaskDelay(pdMS_TO_TICKS(500)); // Short delay before retry
-                            }
-                        }
-                        if ((uxBits & (1 << 1)) == 0) {
-                            logger::write("[payment] Failed to confirm NFC shutdown, restarting ESP.", "error");
-                            ESP.restart();
-                        }
-                        return false;
-                    }
-                }
-                // Check for contrast adjustment
-                std::string contrastKey = getTouch(); 
-                if (contrastKey == "1") {
-                    screen::adjustContrast(-10); // Decrease contrast
-                    logger::write("[payment] Contrast decreased.", "info");
-                } else if (contrastKey == "4") {
-                    screen::adjustContrast(10); // Increase contrast
-                    logger::write("[payment] Contrast increased.", "info");
-                }
-                taskYIELD();
-            } else {
-                logger::write("[payment] Payment made, signaling NFC shutdown.", "info");
-                screen::showSuccess();
-                // Signal nfcTask to shut down RF and enter Idle Mode
-                xEventGroupClearBits(nfcEventGroup, (1 << 0)); // Clear power up bit
-                xEventGroupSetBits(nfcEventGroup, (1 << 1)); // Set turn off bit
 
-                // Wait for confirmation that NFC reader is off and nfcTask is in Idle Mode
-                for (int i = 0; i < 10; ++i) { // Attempt confirmation up to 10 times
+        // Check for payment first
+        logger::write("[payment] Checking if paid.", "info");
+        paymentisMade = isPaymentMade(paymentHash, apiKey);
+
+        if (!paymentisMade) {
+            // Different cancellation behavior based on NFC state
+            if (config::getBool("nfcEnabled")) {
+                // With NFC enabled, check for NFC events and require long press for cancel
+                uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(210));
+                
+                if ((uxBits & (1 << 0)) != 0) { // Card detected
+                    logger::write("[payment] Card detected, checking payment", "info");
+                    vTaskDelay(pdMS_TO_TICKS(2100));
+                    continue;
+                }
+                
+                keyPressed = getLongTouch('*', 210); // Require long press for cancel
+            } else {
+                // Without NFC, simple press is enough to cancel
+                keyPressed = (getTouch() == "*");
+            }
+
+            if (keyPressed) {
+                logger::write("[payment] Payment cancelled by user.", "info");
+                screen::showX();
+                
+                // Only handle NFC shutdown if NFC is enabled
+                if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
+                    xEventGroupClearBits(nfcEventGroup, (1 << 0));
+                    xEventGroupSetBits(nfcEventGroup, (1 << 1));
+                    
+                    // Wait for NFC shutdown confirmation
                     uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
                     if ((uxBits & (1 << 1)) != 0) {
-                        vTaskSuspend(nfcTaskHandle); // Suspend the NFC task
-                        break;
-                    } else {
-                        // Signal nfcTask to shut down RF and enter Idle Mode
-                        xEventGroupClearBits(nfcEventGroup, (1 << 0)); // Clear power up bit
-                        xEventGroupSetBits(nfcEventGroup, (1 << 1)); // Set turn off bit
-                        vTaskDelay(pdMS_TO_TICKS(500)); // Short delay before retry
+                        vTaskSuspend(nfcTaskHandle);
                     }
                 }
+                return false;
+            }
 
-                if ((uxBits & (1 << 1)) == 0) {
-                    logger::write("[payment] Failed to confirm NFC shutdown, restarting ESP.", "error");
-                    ESP.restart();
-                }
+            // Check for contrast adjustment
+            std::string contrastKey = getTouch(); 
+            if (contrastKey == "1") {
+                screen::adjustContrast(-10);
+            } else if (contrastKey == "4") {
+                screen::adjustContrast(10);
+            }
+        }
+        taskYIELD();
+    }
+
+    // Payment successful
+    if (paymentisMade) {
+        screen::showSuccess();
+        logger::write("[payment] Payment has been made.", "info");
+        
+        // Only handle NFC shutdown if NFC is enabled
+        if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
+            xEventGroupClearBits(nfcEventGroup, (1 << 0));
+            xEventGroupSetBits(nfcEventGroup, (1 << 1));
+            
+            uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
+            if ((uxBits & (1 << 1)) != 0) {
+                vTaskSuspend(nfcTaskHandle);
             }
         }
     }
 
-    // Check whether payment has been made
-    if (paymentisMade) {
-        screen::showSuccess();
-        logger::write("[payment] Payment has been made.", "info");
-    }
-
     logger::write("[payment] Returning to App Loop", "debug");
-    //increase sensitivity again
-    cap.setThresholds(3, 5); //configure sensitivity
-    connectionLoss = false; //reset flag
+    if (config::getBool("nfcEnabled")) {
+        cap.setThresholds(3, 5); // Restore normal sensitivity
+    }
+    connectionLoss = false;
     return paymentisMade;
 }

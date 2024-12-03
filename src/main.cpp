@@ -29,11 +29,6 @@
 
 //GLOBAL VARIABLES
 
-//WEB Server
-AsyncWebServer server(80); // Create a web server on port 80
-bool serverStarted = false; // Declare serverStarted as a global variable
-DNSServer dnsServer;
-
 //TASK Handles
 TaskHandle_t appTaskHandle = NULL;
 TaskHandle_t nfcTaskHandle = NULL;
@@ -89,6 +84,21 @@ void initBoot() {
     logger::init();
     logger::write(firmwareName + ": Firmware version = " + firmwareVersion + ", commit hash = " + firmwareCommitHash);
     logger::write(config::getConfigurationsAsString());
+    
+    // Only initialize WiFi if offline mode is disabled
+    if (!config::getBool("offlineMode")) {
+        //init WiFi
+        logger::write("Initializing WiFi ...");
+        WiFi.onEvent(WiFiEventHandler);
+        if (xTaskCreate(WiFiTask, "WiFiTask", 4096, NULL, 21, NULL) != pdPASS) {
+            Serial.println("Failed to create wifi task");
+        }
+    } else {
+        logger::write("Offline mode enabled, skipping WiFi initialization");
+        offlineMode = true;  // Set the global flag
+        onlineStatus = false;  // Ensure online status is false
+    }
+
     power::init();
     jsonRpc::init();
     screen::init();
@@ -123,23 +133,24 @@ void initBoot() {
         delay(1000);
     }
 
-    //init WiFi
-    logger::write("Initializing WiFi ...");
-    if (xTaskCreate(WiFiTask, "Wifi Connect Task", 5000, NULL, 1, &wifiTaskHandle) != pdPASS) {
-        Serial.println("Failed to create wifi task");
+    if (screen::screenTaskHandle == NULL) {
+        logger::write("Screen task failed to initialize", "error");
     }
-
 }
 
 void setup() {
     initBoot();
-    if (nfcEventGroup == NULL) {
-        Serial.println("Failed to create NFC event group");
-    } else {
-        xEventGroupClearBits(nfcEventGroup, (1 << 0) | (1 << 1)); // Clear power up bit and idle bit 1
-        xEventGroupSetBits(nfcEventGroup, (1 << 2)); // Set long idle signal 2
-        if(xTaskCreate(nfcTask, "NFC Task", 8000, NULL, 2, &nfcTaskHandle) != pdPASS) {
-            Serial.println("Failed to create NFC task");
+    
+    // Only create NFC task if enabled in config
+    if (config::getBool("nfcEnabled")) {
+        if (nfcEventGroup == NULL) {
+            Serial.println("Failed to create NFC event group");
+        } else {
+            xEventGroupClearBits(nfcEventGroup, (1 << 0) | (1 << 1));
+            xEventGroupSetBits(nfcEventGroup, (1 << 2));
+            if(xTaskCreate(nfcTask, "NFC Task", 8000, NULL, 2, &nfcTaskHandle) != pdPASS) {
+                Serial.println("Failed to create NFC task");
+            }
         }
     }
     
@@ -158,12 +169,7 @@ void setup() {
 }
 
 void loop() {
-    if (serverStarted) {
-        dnsServer.processNextRequest();
-        vTaskDelay(pdMS_TO_TICKS(1)); 
-    } else {
-        vTaskDelay(pdMS_TO_TICKS(2100)); 
-    }
+    vTaskDelay(pdMS_TO_TICKS(2100));
 }
 
 

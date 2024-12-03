@@ -283,40 +283,29 @@ namespace screen_tft {
 		showStatusSymbols(power::getBatteryPercent());
 		const int16_t qr_max_w = screenWidth; 
 		const int16_t qr_max_h = tft.height() - statusSymbolsBBox.h; 
+
 		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
-			// Adjusting the position and size of the QR code to prevent overlap with the text
-			int qrCodeOffsetY = 8; // Moving the QR code up
-			int qrCodeHeightAdjustment = 48; // Making the QR code smaller to prevent overlap
-			// Render the QR code with the default callback URL
+			// Demo mode code remains unchanged
+			int qrCodeOffsetY = 8;
+			int qrCodeHeightAdjustment = 48;
 			renderQRCode("https://opago-pay.com/getstarted", center_x, center_y - qrCodeOffsetY, qr_max_w, qr_max_h - qrCodeHeightAdjustment);
 			currentPaymentQRCodeData = "https://opago-pay.com/getstarted";
-			// Render setup instructions text at the bottom of the screen
-			int textOffsetY = 48; // Moving the text up to prevent overlap with the QR code
+			int textOffsetY = 48;
 			renderText("Scan for Setup", Courier_Prime_Code12pt8b, TFT_WHITE, center_x, tft.height() - textOffsetY, TC_DATUM);
 			renderText("opago-pay.com/getstarted", Courier_Prime_Code10pt8b, TFT_WHITE, center_x, tft.height() - (textOffsetY - 17), TC_DATUM);
-		}
-
-		else if (offlineMode) {
+		} else if (offlineMode) {
 			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
 			currentPaymentQRCodeData = qrcodeData;
-			//Serial.println(("Payment QR code data: " + currentPaymentQRCodeData).c_str());
 			renderText("\uE06A", MaterialIcons_Regular_24pt_chare06a24pt8b, TFT_WHITE, screenWidth - 10, tft.height() - 10, BR_DATUM); 
-		}
-		else {
-			if (connectionLoss) {
-				renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
-				// Render a black square behind the wifi icon
-				tft.fillRect(center_x -14, center_y - 14, 30, 26, TFT_BLACK);
-				renderText("\uE648", MaterialIcons_Regular_12pt_chare64812pt8b, 0xF800, center_x, center_y + 10, TC_DATUM); 
-				showStatusSymbols(power::getBatteryPercent()); // Refresh the regular wifi icon
-			} else {
-				renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
-				currentPaymentQRCodeData = qrcodeData;
+		} else {
+			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
+			currentPaymentQRCodeData = qrcodeData;
+			if (config::getBool("nfcEnabled")) {
 				if (initFlagNFC) {
-					vTaskDelay(pdMS_TO_TICKS(1200)); //delay because reader needs time to spool up rf
-					renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0x07E0, 0, tft.height() - 10, BL_DATUM); // Bright green
+					vTaskDelay(pdMS_TO_TICKS(1200));
+					renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0x07E0, 0, tft.height() - 10, BL_DATUM);
 				} else {
-					renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0xF800, 0, tft.height() - 10, BL_DATUM); // Bright red
+					renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0xF800, 0, tft.height() - 10, BL_DATUM);
 				}
 			}
 		}
@@ -355,48 +344,37 @@ namespace screen_tft {
 		}
 	}
 
-	void showStatusSymbols(const int &batteryPercent) {
+	void showStatusSymbols(const int& batteryPercent) {
 		// Show wifi status
 		uint16_t color;
-		if (serverStarted) {
-			if (WiFi.softAPgetStationNum() > 0) {
-				color = 0x001F; // A client is connected to AP, show blue
-			} else {
-				color = 0xFD20; // Offline but AP is active with no client connections, show orange
-			}
-			tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
+		if (onlineStatus) {
+			color = TFT_WHITE; // Online, show white
+			tft.fillRect(5, 5, 24, 24, bgColor); // Clear the wifi area
 			wifiBBox = renderText("\uE63E", MaterialIcons_Regular_12pt_chare63e12pt8b, color, 5, 30, TL_DATUM);
 		} else {
-			if (onlineStatus) {
-				color = TFT_WHITE; // Online but no server, show white
-				tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
-				wifiBBox = renderText("\uE63E", MaterialIcons_Regular_12pt_chare63e12pt8b, color, 5, 30, TL_DATUM);
-			} else {
-				color = 0xF800; // Offline with no AP, show red
-				tft.fillRect(5, 5, 24, 24, bgColor); // Clear the area before rendering
-				wifiBBox = renderText("\uE648", MaterialIcons_Regular_12pt_chare64812pt8b, color, 5, 30, TL_DATUM);
-			}
-		}
-		// Show USB symbol if connected to USB
-		if (power::isUSBPowered()) {
-			color = TFT_WHITE;
-			tft.fillRect(30, 5, 24, 24, bgColor); // Clear the area before rendering 
-			usbBBox = renderText("\uE1E0", MaterialIcons_Regular_12pt_chare1e012pt8b, color, 30, 30, TL_DATUM);
+			color = 0xF800; // Offline, show red
+			tft.fillRect(5, 5, 24, 24, bgColor); // Clear the wifi area
+			wifiBBox = renderText("\uE648", MaterialIcons_Regular_12pt_chare64812pt8b, color, 5, 30, TL_DATUM);
 		}
 
-		// Show battery status
+		// Show battery status first (top right)
 		if (power::isUSBPowered()) {
 			if (power::isCharging()) {
 				color = 0x07E0; // Bright green
-				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering 
+				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor);
 				batteryBBox = renderText("\uE1A3", MaterialIcons_Regular_12pt_chare1a312pt8b, color, screenWidth - 35, 30, TL_DATUM);
 			} else {
 				color = TFT_WHITE;
-				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
+				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor);
 				batteryBBox = renderText("\uE1A4", MaterialIcons_Regular_12pt_chare1a412pt8b, color, screenWidth - 35, 30, TL_DATUM);
 			}
+			
+			// Show USB symbol below battery (right side)
+			color = TFT_WHITE;
+			tft.fillRect(screenWidth - 35, 35, 24, 24, bgColor); // Clear the USB area
+			usbBBox = renderText("\uE1E0", MaterialIcons_Regular_12pt_chare1e012pt8b, color, screenWidth - 35, 60, TL_DATUM);
 		} else {
-			tft.fillRect(30, 5, 24, 24, bgColor); // Clear the USB area before rendering 
+			tft.fillRect(screenWidth - 35, 35, 24, 24, bgColor); // Clear the USB area
 			if (batteryPercent >= 20) {
 				if (batteryPercent >= 40) {
 					color = 0x07E0; // Bright green
@@ -405,35 +383,15 @@ namespace screen_tft {
 				} else {
 					color = 0xFD60; // Light red
 				}
-				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
+				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor);
 				batteryBBox = renderText("\uE1A4", MaterialIcons_Regular_12pt_chare1a412pt8b, color, screenWidth - 35, 30, TL_DATUM);
 			} else {
 				color = 0xF800; // Bright red
-				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor); // Clear the area before rendering
+				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor);
 				batteryBBox = renderText("\uE19C", MaterialIcons_Regular_12pt_chare19c12pt8b, color, screenWidth - 35, 30, TL_DATUM);
 			}
 		}
 		
-		//Serial.println(currentScreen.c_str());
-		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted") {
-			// Render "DEMO MODE" in the top center of the screen in bright red
-			renderText("DEMO MODE", Courier_Prime_Code16pt8b, 0xF800, center_x, 0, TC_DATUM);
-		} else if (currentScreen == "paymentQRCode") {
-			// Check the currency and adjust the amount accordingly
-			std::string currencyStr = config::getString("fiatCurrency");
-			// Use the utility function to format the amount with the desired precision
-			// If the currency is 'sat', multiply the amount by 100
-			std::string amountStr = currencyStr == "sat" 
-				? util::doubleToStringWithPrecision(amount * 100, config::getUnsignedShort("fiatPrecision"))
-				: util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision"));
-
-			// Combine the formatted amount and currency into one string
-			std::string amountText = amountStr + " " + currencyStr;
-
-			// Render the combined amount and currency string on the screen
-			renderText(amountText.c_str(), Courier_Prime_Code12pt8b, TFT_WHITE, center_x, 0, TC_DATUM);
-		}
-
 		// Update the global bounding box for status symbols
 		statusSymbolsBBox.x = 0;
 		statusSymbolsBBox.y = 0;

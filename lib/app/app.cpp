@@ -69,28 +69,19 @@ void handleSleepMode() {
 
 void appTask(void* pvParameters) {
     Serial.println("App task started");
-    screen::showHomeScreen();
-    screen::showStatusSymbols(power::getBatteryPercent());
-    vTaskDelay(pdMS_TO_TICKS(420));
     static unsigned long lastPopTime = 0;
     static int popCount = 0;
-    static unsigned long lastUpdate = 0;
     int signal;
+    
     while(1) {
         power::loop();
-        if (millis() - lastUpdate > 2100) {
-            screen::showStatusSymbols(power::getBatteryPercent());
-            lastUpdate = millis();
-        }
         //handleSleepMode();
         if (!jsonRpc::hasPinConflict() || !jsonRpc::inUse()) {
             logger::loop();
             jsonRpc::loop();
         }
         const std::string currentScreen = screen::getCurrentScreen();
-        //logger::write("Current Screen: " + currentScreen);
         if (currentScreen == "") {
-            screen::showHomeScreen();
             keysBuffer = "";
             screen::showEnterAmountScreen(keysToAmount(keysBuffer));
         }
@@ -146,98 +137,94 @@ void appTask(void* pvParameters) {
                     qrcodeData = "";
                     qrcodeDatafallback = "";
                     pin = util::generateRandomPin();
-                    if (config::getString("fiatCurrency") == "sat") { //sat currency in LNbits for some reason returns bits. This needs to be removed once bug is fixed. 
+                    if (config::getString("fiatCurrency") == "sat") {
                         Serial.println("Dividing");
                         amount = amount / 100;
-                    } 
-                    Serial.println("Amount: " + String(amount));
-                    Serial.println("New Amount: " + String(amount));
-                    std::string signedUrl = util::createLnurlPay(amount, pin);
-                    std::string encoded = util::lnurlEncode(signedUrl);
-                    qrcodeData += config::getString("uriSchemaPrefix");
-                    qrcodeData += util::toUpperCase(encoded);
-                    qrcodeDatafallback = qrcodeData;
-                    if (onlineStatus) {
-                        //if WiFi is connected, we can fetch the invoice from the server
-                        screen::showSand();
-                        std::string paymentHash = "";
-                        bool paymentMade = false;
-                        qrcodeData = requestInvoice(signedUrl);
-                        if (qrcodeData.empty()) {
-                            keysBuffer = "";
-                            logger::write("Server connection failed. Falling back to offline mode.");
-                            offlineMode = true;
+                    }
+
+                    int retryCount = 0;
+                    const int MAX_RETRIES = 3;
+                    bool isRetrying = false;
+
+                    while (true) {
+                        if (offlineMode) {
+                            // In offline mode, always proceed with offline QR code
+                            std::string signedUrl = util::createLnurlPay(amount, pin);
+                            qrcodeDatafallback = config::getString("uriSchemaPrefix") + 
+                                               util::toUpperCase(util::lnurlEncode(signedUrl));
                             screen::showPaymentQRCodeScreen(qrcodeDatafallback);
-                            logger::write("Payment request shown: \n" + signedUrl);
-                            logger::write("QR Code data: \n" + qrcodeDatafallback, "debug");
-                        } else {
-                            keysBuffer = "";
+                            break;
+                        }
+
+                        // Online mode with retry logic
+                        if (!isRetrying) {
+                            screen::showSand();
+                            std::string signedUrl = util::createLnurlPay(amount, pin);
+                            qrcodeData = requestInvoice(signedUrl);
+                            if (qrcodeData.empty()) {
+                                retryCount++;
+                                if (!onlineStatus) {
+                                    // Lost WiFi connection - wait in nowifi screen
+                                    screen::showNowifi();
+                                    isRetrying = true;
+                                    continue;
+                                } else if (retryCount < MAX_RETRIES) {
+                                    // Server request failed but we have WiFi - brief nowifi and retry
+                                    screen::showNowifi();
+                                    vTaskDelay(pdMS_TO_TICKS(1200));
+                                    continue;  // Go back to showing sand and trying again
+                                } else {
+                                    // Max retries reached - stay on nowifi screen
+                                    screen::showNowifi();
+                                    isRetrying = true;
+                                    continue;
+                                }
+                            }
                             screen::showPaymentQRCodeScreen(qrcodeData);
-                            logger::write("Payment request shown: \n" + qrcodeData);
-                            paymentHash = fetchPaymentHash(qrcodeData);
+                            std::string paymentHash = fetchPaymentHash(qrcodeData);
                             logger::write("Payment hash: " + paymentHash, "debug");
-                            paymentMade = waitForPaymentOrCancel(paymentHash, config::getString("apiKey.key"), qrcodeData);
-                            if (!paymentMade) { 
-                                screen::showX();
-                                offlineMode = false;
-                                vTaskDelay(pdMS_TO_TICKS(2100));
-                                keysBuffer = "";
-                                screen::showHomeScreen();
-                            } else {
+                            if (waitForPaymentOrCancel(paymentHash, config::getString("apiKey.key"), qrcodeData)) {
                                 screen::showSuccess();
-                                offlineMode = false;
                                 TickType_t startTime = xTaskGetTickCount();
                                 while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
                                     if (getTouch() == "*") {
                                         break;
                                     }
-                                    vTaskDelay(pdMS_TO_TICKS(50)); // Check for input every 50ms
+                                    vTaskDelay(pdMS_TO_TICKS(50));
                                 }
-                                keysBuffer = "";
-                                screen::showHomeScreen();
+                                keysBuffer = "";  // Reset buffer
+                                amount = 0;       // Reset amount
+                                screen::showEnterAmountScreen(0);
+                            } else {
+                                screen::showX();
+                                vTaskDelay(pdMS_TO_TICKS(2100));
+                                keysBuffer = "";  // Reset buffer
+                                amount = 0;       // Reset amount
+                                screen::showEnterAmountScreen(0);
                             }
+                            break;
+                        } else {
+                            // We're in retry mode (after three failures or lost connection)
+                            const std::string keyPressed = keypad::getPressedKey();
+                            if (keyPressed == "*") {
+                                screen::showX();
+                                keysBuffer = "";  // Reset buffer
+                                amount = 0;       // Reset amount
+                                vTaskDelay(pdMS_TO_TICKS(2100));
+                                esp_restart();
+                            } else if (keyPressed == "#" || onlineStatus) {  // Also retry if WiFi is back
+                                // Try again
+                                retryCount = 0;
+                                isRetrying = false;
+                                continue;
+                            }
+                            // Stay on nowifi screen waiting for user input or WiFi reconnection
+                            vTaskDelay(pdMS_TO_TICKS(100));
                         }
-                    } else {
-                        offlineMode = true;
-                        logger::write("Device is offline, displaying payment QR code...");
-                        screen::showPaymentQRCodeScreen(qrcodeData);
-                        logger::write("Payment request shown: \n" + signedUrl);
-                        logger::write("QR Code data: \n" + qrcodeData, "debug");
                     }
                 } else {
-                    // Show the menu screen
+                    // Show menu when amount is 0 and # is pressed
                     screen::showMenu();
-
-                    // Wait for user input
-                    while (true) {
-                        std::string keyPressed = keypad::getPressedKey(); // Assume getKeyPressed() is a function that returns the key pressed
-
-                        if (keyPressed == "1") {
-                            if (WiFi.getMode() != WIFI_AP) {
-                                screen::showEnterAmountScreen(0);
-                                startAccessPoint();
-                                logger::write("Access Point started.");
-                            } else {
-                                screen::showEnterAmountScreen(0);
-                                stopAccessPoint();
-                                offlineMode = false;
-                                logger::write("Access Point stopped.");
-                            }
-                            break; // Exit the loop after handling the key press
-                        } else if (keyPressed == "2") {
-                            // Toggle the offlineOnly flag
-                            offlineOnly = !offlineOnly;
-                            onlineStatus = false;
-                            logger::write("offlineOnly flag toggled to: " + std::to_string(offlineOnly));
-                            screen::showEnterAmountScreen(0);
-                            break; // Exit the loop after handling the key press
-                        } else if (keyPressed == "*") {
-                            // Exit the loop if 'x' is pressed
-                            screen::showEnterAmountScreen(0);
-                            break;
-                        }
-                        vTaskDelay(pdMS_TO_TICKS(50)); // Check for input every 50ms
-                    }
                 }
             } else if (keysBuffer.size() < maxNumKeysPressed) {
                 if (keyPressed != "0" || keysBuffer != "") {
@@ -252,7 +239,6 @@ void appTask(void* pvParameters) {
                 screen::showPaymentPinScreen(pinBuffer);
             } else if (keyPressed == "*" || getLongTouch('*', 210)) { 
                 screen::showX();
-                offlineMode = false;
                 vTaskDelay(pdMS_TO_TICKS(2100));
                 screen::showHomeScreen();
             } else if (keyPressed == "1") {
@@ -272,7 +258,6 @@ void appTask(void* pvParameters) {
                 if (pinBuffer.length() == 4) {
                     if (pinBuffer == pin) {
                         screen::showSuccess();
-                        offlineMode = false;
                         pinBuffer = "";
                         TickType_t startTime = xTaskGetTickCount();
                         while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
@@ -291,7 +276,6 @@ void appTask(void* pvParameters) {
                             incorrectPinAttempts = 0;
                             vTaskDelay(pdMS_TO_TICKS(2100));
                             screen::showHomeScreen();
-                            offlineMode = false;
                         } else {
                             vTaskDelay(pdMS_TO_TICKS(420));
                             screen::showPaymentPinScreen(pinBuffer);
@@ -301,6 +285,20 @@ void appTask(void* pvParameters) {
                 else {
                     screen::showPaymentPinScreen(pinBuffer);
                 }
+            }
+        } else if (currentScreen == "menu") {
+            if (keyPressed == "1") {
+                bool nfcEnabled = config::getBool("nfcEnabled");
+                config::saveConfiguration("nfcEnabled", nfcEnabled ? "false" : "true");
+                vTaskDelay(pdMS_TO_TICKS(210));
+                esp_restart();  
+            } else if (keyPressed == "2") {
+                bool currentOfflineMode = config::getBool("offlineMode");
+                config::saveConfiguration("offlineMode", currentOfflineMode ? "false" : "true");
+                vTaskDelay(pdMS_TO_TICKS(210));
+                esp_restart();  
+            } else if (keyPressed == "*") {
+                screen::showEnterAmountScreen(0);
             }
         }
         taskYIELD();
