@@ -77,6 +77,8 @@ namespace screen_tft {
 	void tellBacklightStatus();
 	void sleep();
 	void wakeup();
+	void showContrastInputScreen(const std::string &contrastInput);
+	void showSensitivityInputScreen(const std::string &sensitivityInput);
 }
 
 #endif

@@ -125,9 +125,9 @@ void initBoot() {
             Serial.println("MPR121 not found, check wiring?");
             while (1);
         }
-        cap.setThresholds(3, 5); //configure sensitivity
+        // Initialize cap touch task and sensitivity
+        cap_touch_init();
         Serial.println("MPR121 found!");
-
     } else {
         Serial.println("Didn't find MPR121!");
         delay(1000);

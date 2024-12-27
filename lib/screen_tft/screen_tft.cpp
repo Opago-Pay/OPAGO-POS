@@ -216,6 +216,24 @@ namespace {
 			screen_tft::showPaymentQRCodeScreen(currentPaymentQRCodeData);
 		}
 	}
+
+	uint16_t adjustColorByContrast(uint16_t originalColor) {
+		// Extract RGB components
+		uint8_t r = (originalColor >> 11) & 0x1F;
+		uint8_t g = (originalColor >> 5) & 0x3F;
+		uint8_t b = originalColor & 0x1F;
+		
+		// Calculate adjustment factor from contrast level (0.1 to 1.0)
+		float contrastFactor = currentContrastPercent / 100.0;
+		
+		// Adjust each component
+		r = (uint8_t)(r * contrastFactor);
+		g = (uint8_t)(g * contrastFactor);
+		b = (uint8_t)(b * contrastFactor);
+		
+		// Recombine into 16-bit color
+		return (r << 11) | (g << 5) | b;
+	}
 }
 
 namespace screen_tft {
@@ -267,6 +285,12 @@ namespace screen_tft {
 		clearScreenBottom(false);
 		int16_t amount_y = center_y - 12;
 
+		// Check for demo mode and show red text if enabled
+		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || 
+			config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
+			renderText("DEMO MODE", Courier_Prime_Code12pt8b, 0xF800, center_x, 5, TC_DATUM);
+		}
+
 		std::string amountStr = util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision"));
 		std::string currencyStr = config::getString("fiatCurrency");
 
@@ -284,21 +308,35 @@ namespace screen_tft {
 		const int16_t qr_max_w = screenWidth; 
 		const int16_t qr_max_h = tft.height() - statusSymbolsBBox.h; 
 
-		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
-			// Demo mode code remains unchanged
+		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || 
+			config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
+			// Demo mode text at status icon height
+			renderText("DEMO MODE", Courier_Prime_Code12pt8b, 0xF800, center_x, 5, TC_DATUM);
+			
+			// Demo mode QR code and instructions
 			int qrCodeOffsetY = 8;
 			int qrCodeHeightAdjustment = 48;
-			renderQRCode("https://opago-pay.com/getstarted", center_x, center_y - qrCodeOffsetY, qr_max_w, qr_max_h - qrCodeHeightAdjustment);
-			currentPaymentQRCodeData = "https://opago-pay.com/getstarted";
+			const std::string demoUrl = "https://opago-pay.com/getstarted";
+			renderQRCode(demoUrl, center_x, center_y - qrCodeOffsetY, qr_max_w, qr_max_h - qrCodeHeightAdjustment);
+			currentPaymentQRCodeData = demoUrl;
 			int textOffsetY = 48;
 			renderText("Scan for Setup", Courier_Prime_Code12pt8b, TFT_WHITE, center_x, tft.height() - textOffsetY, TC_DATUM);
 			renderText("opago-pay.com/getstarted", Courier_Prime_Code10pt8b, TFT_WHITE, center_x, tft.height() - (textOffsetY - 17), TC_DATUM);
 		} else if (offlineMode) {
+			// Show amount and currency at status icon height
+			std::string amountStr = getAmountFiatCurrencyString(amount);
+			renderText(amountStr, Courier_Prime_Code12pt8b, TFT_WHITE, center_x, 5, TC_DATUM);
+			
 			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
 			currentPaymentQRCodeData = qrcodeData;
 			renderText("\uE06A", MaterialIcons_Regular_24pt_chare06a24pt8b, TFT_WHITE, screenWidth - 10, tft.height() - 10, BR_DATUM); 
 		} else {
-			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
+			// Show amount and currency at status icon height
+			std::string amountStr = getAmountFiatCurrencyString(amount);
+			renderText(amountStr, Courier_Prime_Code12pt8b, TFT_WHITE, center_x, 5, TC_DATUM);
+			
+			// Move QR code down a bit for online mode
+			renderQRCode(qrcodeData, center_x, center_y + 10, qr_max_w, qr_max_h); 
 			currentPaymentQRCodeData = qrcodeData;
 			if (config::getBool("nfcEnabled")) {
 				if (initFlagNFC) {
@@ -345,54 +383,50 @@ namespace screen_tft {
 	}
 
 	void showStatusSymbols(const int& batteryPercent) {
-		// Show wifi status
 		uint16_t color;
 		if (onlineStatus) {
-			color = TFT_WHITE; // Online, show white
-			tft.fillRect(5, 5, 24, 24, bgColor); // Clear the wifi area
+			color = adjustColorByContrast(TFT_WHITE);
+			tft.fillRect(5, 5, 24, 24, bgColor);
 			wifiBBox = renderText("\uE63E", MaterialIcons_Regular_12pt_chare63e12pt8b, color, 5, 30, TL_DATUM);
 		} else {
-			color = 0xF800; // Offline, show red
-			tft.fillRect(5, 5, 24, 24, bgColor); // Clear the wifi area
+			color = adjustColorByContrast(0xF800);  // Red
+			tft.fillRect(5, 5, 24, 24, bgColor);
 			wifiBBox = renderText("\uE648", MaterialIcons_Regular_12pt_chare64812pt8b, color, 5, 30, TL_DATUM);
 		}
 
-		// Show battery status first (top right)
 		if (power::isUSBPowered()) {
 			if (power::isCharging()) {
-				color = 0x07E0; // Bright green
-				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor);
-				batteryBBox = renderText("\uE1A3", MaterialIcons_Regular_12pt_chare1a312pt8b, color, screenWidth - 35, 30, TL_DATUM);
+				color = adjustColorByContrast(0x07E0);  // Green
 			} else {
-				color = TFT_WHITE;
-				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor);
-				batteryBBox = renderText("\uE1A4", MaterialIcons_Regular_12pt_chare1a412pt8b, color, screenWidth - 35, 30, TL_DATUM);
+				color = adjustColorByContrast(TFT_WHITE);
 			}
+			tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor);
+			batteryBBox = renderText(power::isCharging() ? "\uE1A3" : "\uE1A4",
+				power::isCharging() ? MaterialIcons_Regular_12pt_chare1a312pt8b : MaterialIcons_Regular_12pt_chare1a412pt8b,
+				color, screenWidth - 35, 30, TL_DATUM);
 			
-			// Show USB symbol below battery (right side)
-			color = TFT_WHITE;
-			tft.fillRect(screenWidth - 35, 35, 24, 24, bgColor); // Clear the USB area
+			color = adjustColorByContrast(TFT_WHITE);
+			tft.fillRect(screenWidth - 35, 35, 24, 24, bgColor);
 			usbBBox = renderText("\uE1E0", MaterialIcons_Regular_12pt_chare1e012pt8b, color, screenWidth - 35, 60, TL_DATUM);
 		} else {
-			tft.fillRect(screenWidth - 35, 35, 24, 24, bgColor); // Clear the USB area
+			tft.fillRect(screenWidth - 35, 35, 24, 24, bgColor);
 			if (batteryPercent >= 20) {
 				if (batteryPercent >= 40) {
-					color = 0x07E0; // Bright green
+					color = adjustColorByContrast(0x07E0);  // Green
 				} else if (batteryPercent >= 20) {
-					color = 0xFD20; // Bright orange
+					color = adjustColorByContrast(0xFD20);  // Orange
 				} else {
-					color = 0xFD60; // Light red
+					color = adjustColorByContrast(0xFD60);  // Light red
 				}
 				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor);
 				batteryBBox = renderText("\uE1A4", MaterialIcons_Regular_12pt_chare1a412pt8b, color, screenWidth - 35, 30, TL_DATUM);
 			} else {
-				color = 0xF800; // Bright red
+				color = adjustColorByContrast(0xF800);  // Red
 				tft.fillRect(screenWidth - 35, 5, 24, 24, bgColor);
 				batteryBBox = renderText("\uE19C", MaterialIcons_Regular_12pt_chare19c12pt8b, color, screenWidth - 35, 30, TL_DATUM);
 			}
 		}
 		
-		// Update the global bounding box for status symbols
 		statusSymbolsBBox.x = 0;
 		statusSymbolsBBox.y = 0;
 		statusSymbolsBBox.w = screenWidth;
@@ -425,5 +459,46 @@ namespace screen_tft {
 		} else {
 			clearScreen();
 		}
+	}
+
+	void showContrastInputScreen(const std::string &contrastInput) {
+		clearScreen(false);
+		showStatusSymbols(power::getBatteryPercent());
+		
+		// Show entered digits or underscores for empty spots
+		std::string displayInput = "___";  // 3 digits for contrast
+		for (size_t i = 0; i < contrastInput.length() && i < 3; i++) {
+			displayInput[i] = contrastInput[i];
+		}
+		
+		// Show instruction text at the top with fixed font size
+		const std::string instructionText1 = "QR Contrast";
+		const std::string instructionText2 = "(1-100)";
+		
+		renderText(instructionText1, Courier_Prime_Code12pt8b, textColor, center_x, 5, TC_DATUM);
+		renderText(instructionText2, Courier_Prime_Code12pt8b, textColor, center_x, 35, TC_DATUM);
+		
+		// Show input digits in the center
+		const GFXfont inputFont = getBestFitFont(displayInput, monospaceFonts);
+		renderText(displayInput, inputFont, textColor, center_x, center_y - 2, TC_DATUM);
+	}
+
+	void showSensitivityInputScreen(const std::string &sensitivityInput) {
+		clearScreenBottom(false);  // Only clear bottom portion to preserve status
+		showStatusSymbols(power::getBatteryPercent());
+		
+		std::string displayInput = "___";  // 3 digits for sensitivity
+		for (size_t i = 0; i < sensitivityInput.length() && i < 3; i++) {
+			displayInput[i] = sensitivityInput[i];
+		}
+		
+		const std::string instructionText1 = "Touch Sensitivity";
+		const std::string instructionText2 = "(1-100)";
+		
+		renderText(instructionText1, Courier_Prime_Code12pt8b, textColor, center_x, 5, TC_DATUM);
+		renderText(instructionText2, Courier_Prime_Code12pt8b, textColor, center_x, 35, TC_DATUM);
+		
+		const GFXfont inputFont = getBestFitFont(displayInput, monospaceFonts);
+		renderText(displayInput, inputFont, textColor, center_x, center_y - 2, TC_DATUM);
 	}
 }

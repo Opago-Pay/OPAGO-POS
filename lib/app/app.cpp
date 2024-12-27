@@ -10,9 +10,16 @@ int incorrectPinAttempts = 0;
 
 const std::string keyPressed;
 
+static unsigned long lastKeyAddedTime = 0;
+const unsigned long KEY_ADD_DELAY = 210; // Rate limit in milliseconds
+
 void appendToKeyBuffer(const std::string &key) {
-	if (keyBufferCharList.find(key) != std::string::npos) {
-		keysBuffer += key;
+	unsigned long currentTime = millis();
+	if (currentTime - lastKeyAddedTime >= KEY_ADD_DELAY) {
+		if (keyBufferCharList.find(key) != std::string::npos) {
+			keysBuffer += key;
+			lastKeyAddedTime = currentTime;
+		}
 	}
 }
 
@@ -91,7 +98,6 @@ void appTask(void* pvParameters) {
             lastActivityTime = millis();
         }
         if (currentScreen == "home") {
-            Serial.println("Home Screen");
             if (keyPressed == "") {
                 keysBuffer = "";
                 screen::showEnterAmountScreen(keysToAmount(keysBuffer));
@@ -147,12 +153,20 @@ void appTask(void* pvParameters) {
                     bool isRetrying = false;
 
                     while (true) {
-                        if (offlineMode) {
-                            // In offline mode, always proceed with offline QR code
-                            std::string signedUrl = util::createLnurlPay(amount, pin);
-                            qrcodeDatafallback = config::getString("uriSchemaPrefix") + 
-                                               util::toUpperCase(util::lnurlEncode(signedUrl));
-                            screen::showPaymentQRCodeScreen(qrcodeDatafallback);
+                        if (offlineMode || config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || 
+                            config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
+                            // In offline mode or demo mode
+                            if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || 
+                                config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
+                                // Demo mode - show setup link
+                                screen::showPaymentQRCodeScreen("https://opago-pay.com/getstarted");
+                            } else {
+                                // Regular offline mode - proceed with offline QR code
+                                std::string signedUrl = util::createLnurlPay(amount, pin);
+                                qrcodeDatafallback = config::getString("uriSchemaPrefix") + 
+                                                   util::toUpperCase(util::lnurlEncode(signedUrl));
+                                screen::showPaymentQRCodeScreen(qrcodeDatafallback);
+                            }
                             break;
                         }
 
@@ -227,10 +241,13 @@ void appTask(void* pvParameters) {
                     screen::showMenu();
                 }
             } else if (keysBuffer.size() < maxNumKeysPressed) {
-                if (keyPressed != "0" || keysBuffer != "") {
-                    appendToKeyBuffer(keyPressed);
-                    logger::write("keysBuffer = " + keysBuffer);
-                    screen::showEnterAmountScreen(keysToAmount(keysBuffer));
+                unsigned long currentTime = millis();
+                if (currentTime - lastKeyAddedTime >= KEY_ADD_DELAY) {
+                    if (keyPressed != "0" || keysBuffer != "") {
+                        appendToKeyBuffer(keyPressed);
+                        logger::write("keysBuffer = " + keysBuffer);
+                        screen::showEnterAmountScreen(keysToAmount(keysBuffer));
+                    }
                 }
             }
         } else if (currentScreen == "paymentQRCode") {
@@ -254,36 +271,40 @@ void appTask(void* pvParameters) {
                     screen::showPaymentQRCodeScreen(qrcodeData);
                 }
             } else if (keyPressed == "0" || keyPressed == "1" || keyPressed == "2" || keyPressed == "3" || keyPressed == "4" || keyPressed == "5" || keyPressed == "6" || keyPressed == "7" || keyPressed == "8" || keyPressed == "9") {
-                pinBuffer += keyPressed;
-                if (pinBuffer.length() == 4) {
-                    if (pinBuffer == pin) {
-                        screen::showSuccess();
-                        pinBuffer = "";
-                        TickType_t startTime = xTaskGetTickCount();
-                        while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
-                            if (getTouch() == "*") {
-                                break;
-                            }
-                            vTaskDelay(pdMS_TO_TICKS(50)); // Check for input every 50ms
-                        }
-                        screen::showHomeScreen();
-                    } else {
-                        screen::showX();
-                        pinBuffer = "";
-                        vTaskDelay(pdMS_TO_TICKS(2100));
-                        if (++incorrectPinAttempts >= 5) {
+                unsigned long currentTime = millis();
+                if (currentTime - lastKeyAddedTime >= KEY_ADD_DELAY) {
+                    pinBuffer += keyPressed;
+                    lastKeyAddedTime = currentTime;
+                    if (pinBuffer.length() == 4) {
+                        if (pinBuffer == pin) {
+                            screen::showSuccess();
                             pinBuffer = "";
-                            incorrectPinAttempts = 0;
-                            vTaskDelay(pdMS_TO_TICKS(2100));
+                            TickType_t startTime = xTaskGetTickCount();
+                            while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
+                                if (getTouch() == "*") {
+                                    break;
+                                }
+                                vTaskDelay(pdMS_TO_TICKS(50)); // Check for input every 50ms
+                            }
                             screen::showHomeScreen();
                         } else {
-                            vTaskDelay(pdMS_TO_TICKS(420));
-                            screen::showPaymentPinScreen(pinBuffer);
+                            screen::showX();
+                            pinBuffer = "";
+                            vTaskDelay(pdMS_TO_TICKS(2100));
+                            if (++incorrectPinAttempts >= 5) {
+                                pinBuffer = "";
+                                incorrectPinAttempts = 0;
+                                vTaskDelay(pdMS_TO_TICKS(2100));
+                                screen::showHomeScreen();
+                            } else {
+                                vTaskDelay(pdMS_TO_TICKS(420));
+                                screen::showPaymentPinScreen(pinBuffer);
+                            }
                         }
                     }
-                }
-                else {
-                    screen::showPaymentPinScreen(pinBuffer);
+                    else {
+                        screen::showPaymentPinScreen(pinBuffer);
+                    }
                 }
             }
         } else if (currentScreen == "menu") {
@@ -297,8 +318,52 @@ void appTask(void* pvParameters) {
                 config::saveConfiguration("offlineMode", currentOfflineMode ? "false" : "true");
                 vTaskDelay(pdMS_TO_TICKS(210));
                 esp_restart();  
+            } else if (keyPressed == "3") {
+                logger::write("Opening contrast input screen"); 
+                pinBuffer = "";
+                screen::showContrastInputScreen(pinBuffer);
+            } else if (keyPressed == "4") {
+                pinBuffer = "";
+                screen::showSensitivityInputScreen(pinBuffer);
             } else if (keyPressed == "*") {
                 screen::showEnterAmountScreen(0);
+            }
+        } else if (currentScreen == "contrastInput") {
+            if (keyPressed == "*") {
+                screen::showMenu();
+            } else if (keyPressed == "#" && !pinBuffer.empty()) {
+                int contrast = std::stoi(pinBuffer);
+                if (contrast < 10) {
+                    contrast = 10;  // Enforce minimum contrast of 10
+                } else if (contrast > 100) {
+                    contrast = 100;  // Enforce maximum contrast of 100
+                }
+                config::saveConfiguration("contrastLevel", std::to_string(contrast));
+                screen::showSuccess();
+                vTaskDelay(pdMS_TO_TICKS(2100));
+                esp_restart();  // Restart to apply new contrast setting
+            } else if (keyPressed >= "0" && keyPressed <= "9" && pinBuffer.length() < 3) {
+                unsigned long currentTime = millis();
+                if (currentTime - lastKeyAddedTime >= KEY_ADD_DELAY) {
+                    pinBuffer += keyPressed;
+                    lastKeyAddedTime = currentTime;
+                    screen::showContrastInputScreen(pinBuffer);
+                }
+            }
+        } else if (currentScreen == "sensitivityInput") {
+            if (keyPressed == "*") {
+                screen::showMenu();
+            } else if (keyPressed == "#" && !pinBuffer.empty()) {
+                int sensitivity = std::stoi(pinBuffer);
+                if (sensitivity < 1) sensitivity = 1;
+                if (sensitivity > 100) sensitivity = 100;
+                config::saveConfiguration("touchSensitivity", std::to_string(sensitivity));
+                screen::showSuccess();
+                vTaskDelay(pdMS_TO_TICKS(2100));
+                esp_restart();  // Reboot to apply new sensitivity setting
+            } else if (keyPressed >= "0" && keyPressed <= "9" && pinBuffer.length() < 3) {
+                pinBuffer += keyPressed;
+                screen::showSensitivityInputScreen(pinBuffer);
             }
         }
         taskYIELD();

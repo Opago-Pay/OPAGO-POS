@@ -75,8 +75,10 @@ void screenTask(void* parameter) {
 						shouldProcess = (currentScreen != "enterAmount" || lastAmount != msg.amount);
 					} else if (msg.type == ScreenMessage::MessageType::PAYMENT_QR) {
 						shouldProcess = (currentScreen != "paymentQRCode" || lastQRCode != msg.text);
-					} else if (msg.type == ScreenMessage::MessageType::PAYMENT_PIN) {
-						// Always process PIN updates as they show progress
+					} else if (msg.type == ScreenMessage::MessageType::PAYMENT_PIN || 
+							   msg.type == ScreenMessage::MessageType::CONTRAST_INPUT ||
+							   msg.type == ScreenMessage::MessageType::SENSITIVITY_INPUT) {
+						// Always process PIN, contrast and sensitivity input updates as they show progress
 						shouldProcess = true;
 					} else {
 						// For all other screens, always process if it's different from current screen
@@ -93,6 +95,8 @@ void screenTask(void* parameter) {
 							case ScreenMessage::MessageType::MENU: newScreen = "menu"; break;
 							case ScreenMessage::MessageType::PAYMENT_PIN: newScreen = "paymentPin"; break;
 							case ScreenMessage::MessageType::ERROR: newScreen = "error"; break;
+							case ScreenMessage::MessageType::CONTRAST_INPUT: newScreen = "contrastInput"; break;
+							case ScreenMessage::MessageType::SENSITIVITY_INPUT: newScreen = "sensitivityInput"; break;
 							default: newScreen = currentScreen; break;
 						}
 						shouldProcess = (currentScreen != newScreen);
@@ -103,28 +107,24 @@ void screenTask(void* parameter) {
 						// Process the message
 						switch (msg.type) {
 							case ScreenMessage::MessageType::HOME:
-								logger::write("Show screen: Home", "debug");
 								screen_tft::renderJPEG("/home.jpg", 0, 0, 1);
 								currentScreen = "home";
 								lastScreen = currentScreen;
 								break;
 								
 							case ScreenMessage::MessageType::X:
-								logger::write("Show screen: X", "debug");
 								screen_tft::renderJPEG("/x.jpg", 0, 0, 1);
 								currentScreen = "X";
 								lastScreen = currentScreen;
 								break;
 								
 							case ScreenMessage::MessageType::NFC:
-								logger::write("Show screen: NFC", "debug");
 								screen_tft::renderJPEG("/NFC.jpg", 0, 0, 1);
 								currentScreen = "NFC";
 								lastScreen = currentScreen;
 								break;
 								
 							case ScreenMessage::MessageType::ENTER_AMOUNT:
-								logger::write("Show screen: Enter Amount", "debug");
 								screen_tft::showEnterAmountScreen(msg.amount);
 								currentScreen = "enterAmount";
 								lastScreen = currentScreen;
@@ -132,7 +132,6 @@ void screenTask(void* parameter) {
 								break;
 								
 							case ScreenMessage::MessageType::PAYMENT_QR:
-								logger::write("Show screen: Payment QR Code", "debug");
 								screen_tft::showPaymentQRCodeScreen(msg.text);
 								currentScreen = "paymentQRCode";
 								lastScreen = currentScreen;
@@ -140,42 +139,37 @@ void screenTask(void* parameter) {
 								break;
 								
 							case ScreenMessage::MessageType::NFC_FAILED:
-								logger::write("Show screen: NFCfailed", "debug");
 								screen_tft::renderJPEG("/NFCfailed.jpg", 0, 0, 1);
 								currentScreen = "NFCfailed";
 								lastScreen = currentScreen;
 								break;
 								
 							case ScreenMessage::MessageType::NFC_SUCCESS:
-								logger::write("Show screen: NFCsuccess", "debug");
 								screen_tft::renderJPEG("/NFCsuccess.jpg", 0, 0, 1);
 								currentScreen = "NFCsuccess";
 								lastScreen = currentScreen;
 								break;
 								
 							case ScreenMessage::MessageType::SUCCESS:
-								logger::write("Show screen: Success", "debug");
 								screen_tft::renderJPEG("/success.jpg", 0, 0, 1);
 								currentScreen = "success";
 								lastScreen = currentScreen;
 								break;
 								
 							case ScreenMessage::MessageType::SAND:
-								logger::write("Show screen: Sand", "debug");
 								screen_tft::renderJPEG("/sand.jpg", 0, 0, 1);
 								currentScreen = "sand";
 								lastScreen = currentScreen;
 								break;
 								
 							case ScreenMessage::MessageType::NO_WIFI:
-								logger::write("Show screen: No WiFi", "debug");
 								screen_tft::renderJPEG("/nowifi.jpg", 0, 0, 1);
 								currentScreen = "nowifi";
 								lastScreen = currentScreen;
 								break;
 								
+							// In the menu case of showPaymentQRCodeScreen:
 							case ScreenMessage::MessageType::MENU:
-								logger::write("Show screen: Menu", "debug");
 								currentScreen = "menu";
 								lastScreen = currentScreen;
 								tft.fillScreen(TFT_BLACK);
@@ -192,21 +186,33 @@ void screenTask(void* parameter) {
 									tft.setFreeFont(&Courier_Prime_Code12pt8b);
 									tft.drawString("1: NFC " + String(nfcStatus.c_str()), center_x, 80);
 									tft.drawString("2: Offline Mode " + String(offlineStatus.c_str()), center_x, 120);
-									tft.drawString("X: Exit", center_x, 160);
+									tft.drawString("3: QR Contrast", center_x, 160);
+									tft.drawString("4: Touch Sensitivity", center_x, 200);
+									tft.drawString("X: Exit", center_x, 240);
 								}
 								break;
 								
 							case ScreenMessage::MessageType::PAYMENT_PIN:
-								logger::write("Show screen: Payment PIN", "debug");
 								screen_tft::showPaymentPinScreen(msg.text);
 								currentScreen = "paymentPin";
 								lastScreen = currentScreen;
 								break;
 								
 							case ScreenMessage::MessageType::ERROR:
-								logger::write("Show screen: Error", "debug");
 								screen_tft::showErrorScreen(msg.text);
 								currentScreen = "error";
+								lastScreen = currentScreen;
+								break;
+								
+							case ScreenMessage::MessageType::CONTRAST_INPUT:
+								screen_tft::showContrastInputScreen(msg.text);
+								currentScreen = "contrastInput";
+								lastScreen = currentScreen;
+								break;
+								
+							case ScreenMessage::MessageType::SENSITIVITY_INPUT:
+								screen_tft::showSensitivityInputScreen(msg.text);
+								currentScreen = "sensitivityInput";
 								lastScreen = currentScreen;
 								break;
 						}
@@ -270,8 +276,6 @@ void showPaymentQRCodeScreen(const std::string &qrcodeData) {
 	msg.text[sizeof(msg.text) - 1] = '\0';
 	xQueueSend(screenQueue, &msg, portMAX_DELAY);
 }
-
-// Implement other screen functions similarly...
 
 void showNFC() {
     ScreenMessage msg{ScreenMessage::MessageType::NFC};
@@ -341,6 +345,20 @@ void sleep() {
 
 void wakeup() {
     ScreenMessage msg{ScreenMessage::MessageType::WAKEUP};
+    xQueueSend(screenQueue, &msg, portMAX_DELAY);
+}
+
+void showContrastInputScreen(const std::string &contrastInput) {
+    ScreenMessage msg(ScreenMessage::MessageType::CONTRAST_INPUT);
+    strncpy(msg.text, contrastInput.c_str(), sizeof(msg.text) - 1);
+    msg.text[sizeof(msg.text) - 1] = '\0';
+    xQueueSend(screenQueue, &msg, portMAX_DELAY);
+}
+
+void showSensitivityInputScreen(const std::string &sensitivityInput) {
+    ScreenMessage msg(ScreenMessage::MessageType::SENSITIVITY_INPUT);
+    strncpy(msg.text, sensitivityInput.c_str(), sizeof(msg.text) - 1);
+    msg.text[sizeof(msg.text) - 1] = '\0';
     xQueueSend(screenQueue, &msg, portMAX_DELAY);
 }
 

@@ -32,7 +32,9 @@ struct ScreenMessage {
         STATUS_SYMBOLS,
         SLEEP,
         WAKEUP,
-        ADJUST_CONTRAST
+        ADJUST_CONTRAST,
+        CONTRAST_INPUT,
+        SENSITIVITY_INPUT
     };
     
     MessageType type;
@@ -78,6 +80,8 @@ void adjustContrast(const int &percentChange);
 void showStatusSymbols(const int &batteryPercent);
 void sleep();
 void wakeup();
+void showContrastInputScreen(const std::string &contrastInput);
+void showSensitivityInputScreen(const std::string &sensitivityInput);
 
 // New screen task function
 void screenTask(void* parameter);

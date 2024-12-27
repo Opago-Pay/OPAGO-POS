@@ -235,80 +235,80 @@ bool isPaymentMade(const std::string &paymentHash, const std::string &apiKey) {
 // Bit 0 (1 << 0): Instructs nfcTask to power up or remain active.
 // Bit 1 (1 << 1): Commands nfcTask to turn off the RF functionality and transition to idle mode. This bit is used particularly after a successful payment is processed.
 bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &apiKey, const std::string &invoice) {
-    // Initialize variables
     paymentisMade = false;
     bool keyPressed = false;
     static unsigned long lastUpdate = 0;
     lastRenderedQRCode = millis();
     EventBits_t uxBits;
     const EventBits_t uxAllBits = ( 1 << 0 ) | ( 1 << 1 );
+    bool lastConnectionState = onlineStatus;
 
     // Only configure NFC if it's enabled
     if (config::getBool("nfcEnabled")) {
-        //decrease sensitivity to prevent interference
-        cap.setThresholds(5, 5); //configure sensitivity
-
-        // Resume NFC task and tell it to turn on
+        cap.setThresholds(5, 5);
         vTaskResume(nfcTaskHandle);
         xEventGroupClearBits(nfcEventGroup, (1 << 1));
         xEventGroupSetBits(nfcEventGroup, (1 << 0));
     }
 
-    // Main loop: wait for payment or cancellation
     while (!paymentisMade) {
-        if (millis() - lastUpdate > 2100) {
-            screen::showStatusSymbols(power::getBatteryPercent());
-            lastUpdate = millis();
-        }
-
-        // Check for payment first
-        logger::write("[payment] Checking if paid.", "info");
-        paymentisMade = isPaymentMade(paymentHash, apiKey);
-
-        if (!paymentisMade) {
-            // Different cancellation behavior based on NFC state
-            if (config::getBool("nfcEnabled")) {
-                // With NFC enabled, check for NFC events and require long press for cancel
-                uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(210));
-                
-                if ((uxBits & (1 << 0)) != 0) { // Card detected
-                    logger::write("[payment] Card detected, checking payment", "info");
-                    vTaskDelay(pdMS_TO_TICKS(2100));
-                    continue;
-                }
-                
-                keyPressed = getLongTouch('*', 210); // Require long press for cancel
+        // Check for connection state changes
+        if (lastConnectionState != onlineStatus) {
+            if (!onlineStatus) {
+                screen::showNowifi();
             } else {
-                // Without NFC, simple press is enough to cancel
-                keyPressed = (getTouch() == "*");
+                screen::showPaymentQRCodeScreen(invoice);
             }
-
-            if (keyPressed) {
-                logger::write("[payment] Payment cancelled by user.", "info");
-                screen::showX();
-                
-                // Only handle NFC shutdown if NFC is enabled
-                if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
-                    xEventGroupClearBits(nfcEventGroup, (1 << 0));
-                    xEventGroupSetBits(nfcEventGroup, (1 << 1));
-                    
-                    // Wait for NFC shutdown confirmation
-                    uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
-                    if ((uxBits & (1 << 1)) != 0) {
-                        vTaskSuspend(nfcTaskHandle);
-                    }
-                }
-                return false;
-            }
-
-            // Check for contrast adjustment
-            std::string contrastKey = getTouch(); 
-            if (contrastKey == "1") {
-                screen::adjustContrast(-10);
-            } else if (contrastKey == "4") {
-                screen::adjustContrast(10);
-            }
+            lastConnectionState = onlineStatus;
         }
+
+        // Check for payment if we're online
+        if (onlineStatus) {
+            logger::write("[payment] Checking if paid.", "info");
+            paymentisMade = isPaymentMade(paymentHash, apiKey);
+        }
+
+        // Handle cancellation
+        if (config::getBool("nfcEnabled")) {
+            uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(210));
+            
+            if ((uxBits & (1 << 0)) != 0) {
+                logger::write("[payment] Card detected, checking payment", "info");
+                vTaskDelay(pdMS_TO_TICKS(2100));
+                continue;
+            }
+            
+            keyPressed = getLongTouch('*', 210);
+        } else {
+            keyPressed = (getTouch() == "*");
+        }
+
+        if (keyPressed) {
+            logger::write("[payment] Payment cancelled by user.", "info");
+            screen::showX();
+            
+            // Only handle NFC shutdown if NFC is enabled
+            if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
+                xEventGroupClearBits(nfcEventGroup, (1 << 0));
+                xEventGroupSetBits(nfcEventGroup, (1 << 1));
+                
+                // Wait for NFC shutdown confirmation
+                uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
+                if ((uxBits & (1 << 1)) != 0) {
+                    vTaskSuspend(nfcTaskHandle);
+                }
+            }
+            return false;
+        }
+
+        // Check for contrast adjustment
+        std::string contrastKey = getTouch(); 
+        if (contrastKey == "1") {
+            screen::adjustContrast(-10);
+        } else if (contrastKey == "4") {
+            screen::adjustContrast(10);
+        }
+
         taskYIELD();
     }
 

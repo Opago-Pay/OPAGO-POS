@@ -3,7 +3,7 @@
 namespace {
 
 	const std::map<const char*, const char*> defaultValues = {
-		{"apiKey.key", "jmZTATdju6UQqcysY6Jspu"},
+		{"apiKey.key", "BueokH4o3FmhWmbvqyqLKz"},
 		//{"callbackUrl", "https://api.opago-pay.com/lnurldevice/api/v1/lnurl/GEVvH"},
 		{"callbackUrl", "https://opago-pay.com/getstarted"},
 		{"fiatCurrency", "EUR"},
@@ -17,6 +17,7 @@ namespace {
 		{"wifiPwd",""},
 		{"nfcEnabled", "false"},
 		{"offlineMode", "false"},
+		{"touchSensitivity", "80"},
 	};
 
 	// https://arduinojson.org/v6/api/dynamicjsondocument/
