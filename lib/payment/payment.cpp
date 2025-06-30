@@ -312,7 +312,8 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
             screen::adjustContrast(10);
         }
 
-        taskYIELD();
+        // Yield to prevent watchdog timer from triggering
+        vTaskDelay(pdMS_TO_TICKS(10)); // Small delay to ensure proper yielding
     }
 
     // Payment successful
@@ -471,7 +472,8 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
             screen::adjustContrast(10);
         }
 
-        taskYIELD();
+        // Yield to prevent watchdog timer from triggering
+        vTaskDelay(pdMS_TO_TICKS(10)); // Small delay to ensure proper yielding
     }
 
     // Payment successful

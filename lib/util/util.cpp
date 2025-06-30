@@ -104,7 +104,7 @@ namespace util {
 			uint8_t payload[51];// 51 bytes is max one can get with xor-encryption
 			size_t payload_len;
 			payload_len = xorEncrypt(payload, sizeof(payload), (uint8_t *)keyBytes, keyBytes_len, nonce, sizeof(nonce), pin, amount);
-			return config::getString("callbackUrl") + "?p=" + urlEncode(toBase64(payload, payload_len, BASE64_STANDARD).c_str());
+			return config::getString("callbackUrl") + "?p=" + toBase64(payload, payload_len, BASE64_URLSAFE | BASE64_NOPADDING).c_str();
 		} catch (const std::exception &e) {
 			logger::write("Error while creating lnurl-pay: " + std::string(e.what()), "error");
 		}

@@ -304,9 +304,7 @@ namespace screen_tft {
 
 	void showPaymentQRCodeScreen(const std::string &qrcodeData) {
 		clearScreen(false);
-		showStatusSymbols(power::getBatteryPercent());
-		const int16_t qr_max_w = screenWidth; 
-		const int16_t qr_max_h = tft.height() - statusSymbolsBBox.h; 
+		showStatusSymbols(power::getBatteryPercent()); 
 
 		if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || 
 			config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
@@ -317,33 +315,82 @@ namespace screen_tft {
 			int qrCodeOffsetY = 8;
 			int qrCodeHeightAdjustment = 48;
 			const std::string demoUrl = "https://opago-pay.com/getstarted";
-			renderQRCode(demoUrl, center_x, center_y - qrCodeOffsetY, qr_max_w, qr_max_h - qrCodeHeightAdjustment);
+			int16_t demo_qr_max_w = screenWidth - 10;
+			int16_t demo_qr_max_h = tft.height() - statusSymbolsBBox.h - 60;
+			renderQRCode(demoUrl, center_x, center_y - qrCodeOffsetY, demo_qr_max_w, demo_qr_max_h - qrCodeHeightAdjustment);
 			currentPaymentQRCodeData = demoUrl;
 			int textOffsetY = 48;
 			renderText("Scan for Setup", Courier_Prime_Code12pt8b, TFT_WHITE, center_x, tft.height() - textOffsetY, TC_DATUM);
 			renderText("opago-pay.com/getstarted", Courier_Prime_Code10pt8b, TFT_WHITE, center_x, tft.height() - (textOffsetY - 17), TC_DATUM);
-		} else if (offlineMode) {
-			// Show amount and currency at status icon height
-			std::string amountStr = getAmountFiatCurrencyString(amount);
-			renderText(amountStr, Courier_Prime_Code12pt8b, TFT_WHITE, center_x, 5, TC_DATUM);
-			
-			renderQRCode(qrcodeData, center_x, center_y, qr_max_w, qr_max_h); 
-			currentPaymentQRCodeData = qrcodeData;
-			renderText("\uE06A", MaterialIcons_Regular_24pt_chare06a24pt8b, TFT_WHITE, screenWidth - 10, tft.height() - 10, BR_DATUM); 
 		} else {
-			// Show amount and currency at status icon height
+			// Normal payment mode (not demo)
 			std::string amountStr = getAmountFiatCurrencyString(amount);
+			std::string currency = config::getString("fiatCurrency");
+			
+			// Position amount text at the very top with original font
 			renderText(amountStr, Courier_Prime_Code12pt8b, TFT_WHITE, center_x, 5, TC_DATUM);
 			
-			// Move QR code down a bit for online mode
-			renderQRCode(qrcodeData, center_x, center_y + 10, qr_max_w, qr_max_h); 
+			// Calculate QR code area - absolutely maximize screen usage
+			int16_t qr_top_margin = 25; // Minimal top margin
+			int16_t qr_bottom_margin = 12; // Just enough for icons
+			
+			// Calculate maximum QR dimensions - use full width
+			int16_t qr_max_width = screenWidth;
+			int16_t qr_max_height = tft.height() - qr_top_margin - qr_bottom_margin;
+			
+			// Render QR code without automatic borders to maximize size
+			// We'll render it manually to avoid the border reduction
+			const char* data = qrcodeData.c_str();
+			uint8_t qrVersion = 1;
+			while (qrVersion <= 40) {
+				const uint16_t bufferSize = qrcode_getBufferSize(qrVersion);
+				QRCode qrcode;
+				uint8_t qrcodeDataBuffer[bufferSize];
+				const int8_t result = qrcode_initText(&qrcode, qrcodeDataBuffer, qrVersion, ECC_LOW, data);
+				if (result == 0) {
+					// Calculate scale to fill available space
+					uint8_t scale = std::min(qr_max_width / qrcode.size, qr_max_height / qrcode.size);
+					uint16_t qr_size = qrcode.size * scale;
+					
+					// Center the QR code
+					int16_t qr_x = (screenWidth - qr_size) / 2;
+					int16_t qr_y = qr_top_margin + ((qr_max_height - qr_size) / 2);
+					
+					// Draw white background
+					tft.fillRect(qr_x, qr_y, qr_size, qr_size, textColor);
+					
+					// Draw QR modules
+					for (uint8_t y = 0; y < qrcode.size; y++) {
+						for (uint8_t x = 0; x < qrcode.size; x++) {
+							if (qrcode_getModule(&qrcode, x, y)) {
+								tft.fillRect(qr_x + (x * scale), qr_y + (y * scale), scale, scale, bgColor);
+							}
+						}
+					}
+					break;
+				} else if (result == -2) {
+					qrVersion++;
+				} else {
+					logger::write("QR code generation failed", "error");
+					break;
+				}
+			}
 			currentPaymentQRCodeData = qrcodeData;
+			
+			// Log the displayed LNURL with amount and currency
+			logger::write("[screen] Displaying payment QR - Amount: " + 
+			              util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision")) + 
+			              " " + currency + ", LNURL: " + qrcodeData, "info");
+			
+			// Show PIN icon at bottom right corner
+			renderText("\uE06A", MaterialIcons_Regular_24pt_chare06a24pt8b, TFT_WHITE, screenWidth - 5, tft.height() - 2, BR_DATUM);
+			
+			// Show NFC status icon at bottom left if enabled
 			if (config::getBool("nfcEnabled")) {
 				if (initFlagNFC) {
-					vTaskDelay(pdMS_TO_TICKS(1200));
-					renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0x07E0, 0, tft.height() - 10, BL_DATUM);
+					renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0x07E0, 5, tft.height() - 2, BL_DATUM);
 				} else {
-					renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0xF800, 0, tft.height() - 10, BL_DATUM);
+					renderText("\uEA71", MaterialIcons_Regular_24pt_charea7124pt8b, 0xF800, 5, tft.height() - 2, BL_DATUM);
 				}
 			}
 		}
