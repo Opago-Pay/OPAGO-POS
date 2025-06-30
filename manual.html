@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>OPAGO POS GEN1 User Manual</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1, h2, h3 {
+            color: #333;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffeeba;
+            color: #856404;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .note {
+            background-color: #e9ecef;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .step {
+            margin-bottom: 20px;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <h1>OPAGO POS GEN1 Bitcoin-Lightning Terminal Manual</h1>
+
+    <div class="warning">
+        <strong>⚠️ WARNING:</strong> Most devices are shipped with non-functional demo mode setup. Some devices might be connected to a test wallet when shipped. DO NOT send any payments to the device before you have connected it with your own OPAGO account or the funds will be irrecoverably lost.
+    </div>
+
+    <h2>I. Initial Setup</h2>
+    <div class="step">
+        <h3>A. Device Installation</h3>
+        <ol>
+            <li>Create an OPAGO account at dashboard.opago-pay.com if you haven't already</li>
+            <li>Log in to the dashboard</li>
+            <li>Connect your POS terminal to your computer via USB</li>
+            <li>In the dashboard under "Settings" → "Install POS":
+                <ul>
+                    <li>Select the latest firmware version</li>
+                    <li>Click "Start installation program"</li>
+                    <li>Note: Webserial is currently only supported in Google Chrome and MS Edge</li>
+                    </li>
+                </ul>
+            </li>
+            <li>Select your serial interface:
+                <ul>
+                    <li>Windows: Usually "COM3"</li>
+                    <li>MAC: Format "ch.wchusbserial123456789"</li>
+                    <li>Click "Connect"</li>
+                </ul>
+            <li>Click "Install"</li>
+            <li>Important: When prompted with "Erase device":
+                <ul>
+                    <li>Select "Erase" when upgrading from version 1.x.x to 2.x.x</li>
+                    <li>Select "Erase" when selling or returning the device</li>
+                    <li>Otherwise, continue without selecting erase</li>
+                </ul>
+            </li>
+            <li>Confirm the installation by clicking "Install"</li>
+        </ol>
+    </div>
+
+    <div class="step">
+        <h3>B. Device Configuration</h3>
+        <ol>
+            <li>After installation completes (about 2 minutes), you'll be redirected to the configuration page</li>
+            <li>Choose one of two options:
+                <ul>
+                    <li>First time setup: Select "Create New Device"</li>
+                    <li>Existing device: Select your device from the list to load its configuration
+                        <div class="note">Only API keys, title, and currency settings are stored. WiFi credentials must be entered manually for security reasons.</div>
+                    </li>
+                </ul>
+            </li>
+            <li>Configure your device:
+                <ul>
+                    <li>Title: Give your device a unique name</li>
+                    <li>Currency: Select your preferred currency (EUR, CHF, etc.)</li>
+                    <li>For no conversion, select "sat" (1 Bitcoin = 100 million Satoshi - sat)</li>
+                    <li>WiFi Settings: Enter your network name and password
+                        <div class="note">Leave blank for offline-only operation</div>
+                    </li>
+                    <li>Save the configuration by clicking "Save Configuration"</li>
+                </ul>
+            </li>
+        </ol>
+    </div>
+
+    <h2>II. Operating Instructions</h2>
+    
+    <div class="step">
+        <h3>A. Basic Payment Flow</h3>
+        <ol>
+            <li>Enter amount using the keypad
+                <ul>
+                    <li>X key: Delete last digit</li>
+                    <li>Hold X: Clear entire amount</li>
+                </ul>
+            </li>
+            <li>Press ✓ to confirm amount</li>
+            <li>Device displays QR code for payment</li>
+            <li>Customer can pay by:
+                <ul>
+                    <li>Scanning QR code with any Lightning wallet</li>
+                    <li>Using a BoltCard (if NFC is enabled)</li>
+                </ul>
+            </li>
+        </ol>
+    </div>
+
+    <div class="step">
+        <h3>B. Offline Operation</h3>
+        <ol>
+            <li>A red, crossed-out WiFi symbol appears in the upper left corner when device is offline. If offline mode is activated, a "PIN" symbol appears in the bottom right corner</li>
+            <li>After customer pays, they receive a link to a 4-digit PIN in their Lightning wallet</li>
+            <li>Press ✓ to enter PIN verification mode</li>
+            <li>Enter the provided 4-digit PIN</li>
+            <li>Green checkmark confirms correct PIN</li>
+        </ol>
+    </div>
+
+    <div class="step">
+        <h3>C. NFC Payment (BoltCard)</h3>
+        <ol>
+            <li>The NFC reader is located behind the left side of the keypad</li>
+            <li>Only available in online mode</li>
+            <li>NFC symbol appears when card is detected</li>
+            <li>Green checkmark on NFC symbol= successful card read</li>
+            <li>Red X = retry card presentation</li>
+            <li>Final green checkmark confirms payment</li>
+        </ol>
+    </div>
+
+    <div class="step">
+        <h3>D. Device Settings</h3>
+        <ol>
+            <li>Access settings menu by pressing ✓ when amount is 0</li>
+            <li>Available options:
+                <ul>
+                    <li>1: Toggle NFC on/off</li>
+                    <li>2: Toggle offline mode</li>
+                    <li>3: Adjust QR code contrast (1-100)</li>
+                </ul>
+            </li>
+            <li>Device will restart to save new settings</li>
+        </ol>
+    </div>
+
+    <h2>III. Maintenance</h2>
+    
+    <div class="step">
+        <h3>A. Charging</h3>
+        <ul>
+            <li>Use included USB-C cable</li>
+            <li>Can be used while charging</li>
+            <li>Full charge provides ~200 transactions</li>
+            <li>Battery status shown in top right corner</li>
+            <li>Power button on top edge must be on to charge</li></li>
+            <li>If you are unable to charge the device, please contact support@opago-pay.com</li>
+        </ul>
+    </div>
+
+    <div class="step">
+        <h3>B. Operating Conditions</h3>
+        <ul>
+            <li>Operating temperature: 0°C to +40°C</li>
+            <li>Avoid leaving device in extreme temperatures</li>
+            <li>Use power button on top edge when not in use</li>
+            <li>Turn on device before charging</li>
+        </ul>
+    </div>
+
+    <div class="note">
+        <strong>Support:</strong> For additional assistance, please contact support@opago-pay.com
+    </div>
+
+    <h2>IV. Troubleshooting</h2>
+    
+    <div class="step">
+        <h3>A. Device Not Charging</h3>
+        <ul>
+            <li>Check if power button on top edge is turned on</li>
+            <li>Try a different USB-C cable</li>
+            <li>If problem persists, contact support</li>
+        </ul>
+    </div>
+
+    <div class="step">
+        <h3>B. Connection Loss During Payment</h3>
+        <ul>
+            <li>If WiFi connection is lost during an online payment:
+                <ul>
+                    <li>Device shows a large red WiFi symbol and orange exclamation mark</li>
+                    <li>Device will automatically reconnect when back in WiFi range</li>
+                    <li>Payment processing resumes automatically after reconnection</li>
+                    <li>No action required from merchant or customer</li>
+                </ul>
+            </li>
+        </ul>
+    </div>
+
+    <div class="step">
+        <h3>C. Installation Issues</h3>
+        <ul>
+            <li>"Port already open" error:
+                <ol>
+                    <li>Unplug the device</li>
+                    <li>Reload the browser page</li>
+                    <li>Plug the device back in</li>
+                </ol>
+            </li>
+            <li>Stream issues: Follow same steps as above</li>
+        </ul>
+    </div>
+
+    <div class="step">
+        <h3>D. NFC Card Issues</h3>
+        <ul>
+            <li>Card not being processed could be due to:
+                <ul>
+                    <li>Card is locked</li>
+                    <li>Non-standard LNURL on card</li>
+                    <li>Insufficient funds on card</li>
+                    <li>Damaged card</li>
+                    <li>Unsupported chip type</li>
+                    <li>Incorrect placement of card - try moving the card slowly around the left side of the keypad to find the optimal position</li>
+                </ul>
+            </li>
+        </ul>
+    </div>
+
+</body>
+</html>

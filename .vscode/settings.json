@@ -1,9 +1,9 @@
 {
     "files.associations": {
+        "bitset": "cpp",
         "array": "cpp",
         "atomic": "cpp",
         "*.tcc": "cpp",
-        "bitset": "cpp",
         "cctype": "cpp",
         "chrono": "cpp",
         "clocale": "cpp",
@@ -52,15 +52,7 @@
         "sstream": "cpp",
         "stdexcept": "cpp",
         "streambuf": "cpp",
-        "thread": "cpp",
         "cinttypes": "cpp",
-        "typeinfo": "cpp",
-        "condition_variable": "cpp",
-        "set": "cpp",
-        "future": "cpp",
-        "mutex": "cpp",
-        "variant": "cpp"
-    },
-    "cmake.sourceDirectory": "/Users/michaelfischer/opago-pos/OpagoPoS/.pio/libdeps/esp32/Adafruit BusIO",
-    "idf.port": "/dev/cu.wchusbserial56750115591"
+        "typeinfo": "cpp"
+    }
 }

@@ -5,3 +5,6 @@
 .vscode
 lib/Adafruit-PN532-NTAG424/
 lib/Adafruit-GFX-Library/
+
+# LnBits documentation files
+lnbitsv*.json
