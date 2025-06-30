@@ -2,6 +2,9 @@
 
 uint8_t lastRenderedQRCode = 0;
 bool lastConnectionLossState = false;
+TaskHandle_t onlineMonitorTaskHandle = NULL;
+bool onlineMonitorActive = false;
+std::string onlinePaymentHash = "";
 
 std::string parseCallbackUrl(const std::string &response) {
     DynamicJsonDocument doc(1024);
@@ -335,4 +338,278 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
     }
     connectionLoss = false;
     return paymentisMade;
+}
+
+bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &pin) {
+    paymentisMade = false;
+    bool keyPressed = false;
+    lastRenderedQRCode = millis();
+    EventBits_t uxBits;
+    const EventBits_t uxAllBits = ( 1 << 0 ) | ( 1 << 1 );
+    bool lastConnectionState = onlineStatus;
+    unsigned long lastOnlineCheck = 0;
+    const unsigned long ONLINE_CHECK_INTERVAL = 2000; // Check every 2 seconds
+    
+    // Show the LNURL QR immediately (same for both online/offline)
+    screen::showPaymentQRCodeScreen(lnurlQR);
+    logger::write("[payment] Showing LNURL QR code", "info");
+
+    // Only configure NFC if it's enabled
+    if (config::getBool("nfcEnabled")) {
+        cap.setThresholds(5, 5);
+        vTaskResume(nfcTaskHandle);
+        xEventGroupClearBits(nfcEventGroup, (1 << 1));
+        xEventGroupSetBits(nfcEventGroup, (1 << 0));
+    }
+
+    while (!paymentisMade) {
+        // Check for connection state changes
+        if (lastConnectionState != onlineStatus) {
+            if (!onlineStatus) {
+                logger::write("[payment] Connection lost", "info");
+                screen::showNowifi();
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                screen::showPaymentQRCodeScreen(lnurlQR);
+            } else {
+                logger::write("[payment] Connection restored", "info");
+                screen::showPaymentQRCodeScreen(lnurlQR);
+            }
+            lastConnectionState = onlineStatus;
+        }
+
+        // Check for payment if we're online and have a payment hash
+        if (onlineStatus && onlineMonitorActive && !onlinePaymentHash.empty()) {
+            unsigned long currentTime = millis();
+            if (currentTime - lastOnlineCheck >= ONLINE_CHECK_INTERVAL) {
+                logger::write("[payment] Checking if online payment made", "info");
+                paymentisMade = isPaymentMade(onlinePaymentHash, config::getString("apiKey.key"));
+                lastOnlineCheck = currentTime;
+            }
+        }
+
+        // Handle cancellation and PIN entry
+        if (config::getBool("nfcEnabled")) {
+            uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(210));
+            
+            if ((uxBits & (1 << 0)) != 0) {
+                logger::write("[payment] Card detected, checking payment", "info");
+                vTaskDelay(pdMS_TO_TICKS(2100));
+                continue;
+            }
+            
+            keyPressed = getLongTouch('*', 210);
+                         if (getTouch() == "#") {
+                 // Switch to PIN entry mode
+                 logger::write("[payment] Switching to PIN entry mode", "info");
+                 
+                 // Cleanup NFC if enabled
+                 if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
+                     xEventGroupClearBits(nfcEventGroup, (1 << 0));
+                     xEventGroupSetBits(nfcEventGroup, (1 << 1));
+                     uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
+                     if ((uxBits & (1 << 1)) != 0) {
+                         vTaskSuspend(nfcTaskHandle);
+                     }
+                 }
+                 
+                 // Clean up online monitor task
+                 if (onlineMonitorTaskHandle != NULL) {
+                     vTaskDelete(onlineMonitorTaskHandle);
+                     onlineMonitorTaskHandle = NULL;
+                 }
+                 
+                 // Transition to PIN screen
+                 screen::showPaymentPinScreen("");
+                 return false; // Return false to indicate we've handled the transition
+             }
+        } else {
+            keyPressed = (getTouch() == "*");
+                         if (getTouch() == "#") {
+                 // Switch to PIN entry mode
+                 logger::write("[payment] Switching to PIN entry mode", "info");
+                 
+                 // Clean up online monitor task
+                 if (onlineMonitorTaskHandle != NULL) {
+                     vTaskDelete(onlineMonitorTaskHandle);
+                     onlineMonitorTaskHandle = NULL;
+                 }
+                 
+                 // Transition to PIN screen
+                 screen::showPaymentPinScreen("");
+                 return false; // Return false to indicate we've handled the transition
+             }
+        }
+
+        if (keyPressed) {
+            logger::write("[payment] Payment cancelled by user", "info");
+            screen::showX();
+            
+            // Cleanup NFC if enabled
+            if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
+                xEventGroupClearBits(nfcEventGroup, (1 << 0));
+                xEventGroupSetBits(nfcEventGroup, (1 << 1));
+                uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
+                if ((uxBits & (1 << 1)) != 0) {
+                    vTaskSuspend(nfcTaskHandle);
+                }
+            }
+            
+            // Clean up online monitor task
+            if (onlineMonitorTaskHandle != NULL) {
+                vTaskDelete(onlineMonitorTaskHandle);
+                onlineMonitorTaskHandle = NULL;
+            }
+            
+            return false;
+        }
+
+        // Check for contrast adjustment
+        std::string contrastKey = getTouch(); 
+        if (contrastKey == "1") {
+            screen::adjustContrast(-10);
+        } else if (contrastKey == "4") {
+            screen::adjustContrast(10);
+        }
+
+        taskYIELD();
+    }
+
+    // Payment successful
+    if (paymentisMade) {
+        screen::showSuccess();
+        logger::write("[payment] Payment successful", "info");
+        
+        // Cleanup NFC if enabled
+        if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
+            xEventGroupClearBits(nfcEventGroup, (1 << 0));
+            xEventGroupSetBits(nfcEventGroup, (1 << 1));
+            uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
+            if ((uxBits & (1 << 1)) != 0) {
+                vTaskSuspend(nfcTaskHandle);
+            }
+        }
+        
+        // Clean up online monitor task
+        if (onlineMonitorTaskHandle != NULL) {
+            vTaskDelete(onlineMonitorTaskHandle);
+            onlineMonitorTaskHandle = NULL;
+        }
+    }
+
+    logger::write("[payment] Returning to App Loop", "debug");
+    if (config::getBool("nfcEnabled")) {
+        cap.setThresholds(3, 5); // Restore normal sensitivity
+    }
+    connectionLoss = false;
+    return paymentisMade;
+}
+
+void onlinePaymentMonitorTask(void* pvParameters) {
+    struct InvoiceTaskParams {
+        std::string signedUrl;
+        double amount;
+        std::string pin;
+    };
+    
+    InvoiceTaskParams* params = (InvoiceTaskParams*)pvParameters;
+    std::string signedUrl = params->signedUrl;
+    double amount = params->amount;
+    std::string pin = params->pin;
+    
+    logger::write("[onlinePaymentMonitorTask] Starting background online payment monitoring", "info");
+    
+    // Reset monitoring flags
+    onlineMonitorActive = false;
+    onlinePaymentHash = "";
+    
+    // Try to get payment hash from the LNURL for online monitoring
+    int retryCount = 0;
+    const int MAX_RETRIES = 3;
+    
+    while (retryCount < MAX_RETRIES && onlineStatus) {
+        logger::write("[onlinePaymentMonitorTask] Attempt " + std::to_string(retryCount + 1), "info");
+        
+        std::string invoice = requestInvoice(signedUrl);
+        if (!invoice.empty()) {
+            std::string paymentHash = fetchPaymentHash(invoice);
+            if (!paymentHash.empty()) {
+                logger::write("[onlinePaymentMonitorTask] Online payment hash obtained successfully", "info");
+                onlinePaymentHash = paymentHash;
+                onlineMonitorActive = true;
+                
+                // Clean up and delete task
+                delete params;
+                onlineMonitorTaskHandle = NULL;
+                vTaskDelete(NULL);
+                return;
+            }
+        }
+        
+        retryCount++;
+        if (retryCount < MAX_RETRIES) {
+            vTaskDelay(pdMS_TO_TICKS(1000)); // Wait 1 second before retry
+        }
+    }
+    
+    logger::write("[onlinePaymentMonitorTask] Online payment hash fetch failed after " + std::to_string(MAX_RETRIES) + " attempts", "info");
+    onlineMonitorActive = false;
+    onlinePaymentHash = "";
+    
+    // Clean up and delete task
+    delete params;
+    onlineMonitorTaskHandle = NULL;
+    vTaskDelete(NULL);
+}
+
+bool startUnifiedPaymentFlow(const double &amount, const std::string &pin) {
+    logger::write("[payment] Starting unified payment flow v3.0.0", "info");
+    
+    // Always generate LNURL QR (same for both online/offline)
+    std::string signedUrl = util::createLnurlPay(amount, pin);
+    std::string lnurlQR = config::getString("uriSchemaPrefix") + 
+                         util::toUpperCase(util::lnurlEncode(signedUrl));
+    
+    // Set the global qrcodeData for compatibility
+    qrcodeData = lnurlQR;
+    
+    // Check if we're in demo mode
+    if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || 
+        config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
+        logger::write("[payment] Demo mode detected", "info");
+        screen::showPaymentQRCodeScreen("https://opago-pay.com/getstarted");
+        return true; // Demo mode doesn't need payment processing
+    }
+    
+    // If we're in offline-only mode, skip online attempt
+    if (offlineMode || !onlineStatus) {
+        logger::write("[payment] Offline mode - showing LNURL QR only", "info");
+        screen::showPaymentQRCodeScreen(lnurlQR);
+        return waitForPaymentWithFallback(lnurlQR, pin);
+    }
+    
+    // Start background task for online payment monitoring
+    logger::write("[payment] Starting background online payment monitoring", "info");
+    
+    struct InvoiceTaskParams {
+        std::string signedUrl;
+        double amount;
+        std::string pin;
+    };
+    
+    InvoiceTaskParams* params = new InvoiceTaskParams();
+    params->signedUrl = signedUrl;
+    params->amount = amount;
+    params->pin = pin;
+    
+    // Create background task for online payment monitoring
+    if (xTaskCreate(onlinePaymentMonitorTask, "onlineMonitor", 8192, params, 1, &onlineMonitorTaskHandle) != pdPASS) {
+        logger::write("[payment] Failed to create online monitor task, falling back to offline only", "error");
+        delete params;
+        onlineMonitorTaskHandle = NULL;
+        screen::showPaymentQRCodeScreen(lnurlQR);
+        return waitForPaymentWithFallback(lnurlQR, pin);
+    }
+    
+    // Wait for payment with fallback handling
+    return waitForPaymentWithFallback(lnurlQR, pin);
 }

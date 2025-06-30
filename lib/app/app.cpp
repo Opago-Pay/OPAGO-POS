@@ -1,7 +1,6 @@
 #include "app.h"
 
 std::string pin = "";
-std::string qrcodeDatafallback = "";
 std::string keysBuffer = "";
 const std::string keyBufferCharList = "0123456789";
 bool correctPin = false;
@@ -141,100 +140,36 @@ void appTask(void* pvParameters) {
                 amount = keysToAmount(keysBuffer);
                 if (amount > 0) {
                     qrcodeData = "";
-                    qrcodeDatafallback = "";
                     pin = util::generateRandomPin();
                     if (config::getString("fiatCurrency") == "sat") {
                         Serial.println("Dividing");
                         amount = amount / 100;
                     }
 
-                    int retryCount = 0;
-                    const int MAX_RETRIES = 3;
-                    bool isRetrying = false;
-
-                    while (true) {
-                        if (offlineMode || config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || 
-                            config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
-                            // In offline mode or demo mode
-                            if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || 
-                                config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
-                                // Demo mode - show setup link
-                                screen::showPaymentQRCodeScreen("https://opago-pay.com/getstarted");
-                            } else {
-                                // Regular offline mode - proceed with offline QR code
-                                std::string signedUrl = util::createLnurlPay(amount, pin);
-                                qrcodeDatafallback = config::getString("uriSchemaPrefix") + 
-                                                   util::toUpperCase(util::lnurlEncode(signedUrl));
-                                screen::showPaymentQRCodeScreen(qrcodeDatafallback);
+                    // Use unified payment flow v3.0.0
+                    logger::write("Starting unified payment flow v3.0.0", "info");
+                    bool paymentResult = startUnifiedPaymentFlow(amount, pin);
+                    
+                    if (paymentResult) {
+                        // Payment successful - show success screen
+                        screen::showSuccess();
+                        TickType_t startTime = xTaskGetTickCount();
+                        while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
+                            if (getTouch() == "*") {
+                                break;
                             }
-                            break;
+                            vTaskDelay(pdMS_TO_TICKS(50));
                         }
-
-                        // Online mode with retry logic
-                        if (!isRetrying) {
-                            screen::showSand();
-                            std::string signedUrl = util::createLnurlPay(amount, pin);
-                            qrcodeData = requestInvoice(signedUrl);
-                            if (qrcodeData.empty()) {
-                                retryCount++;
-                                if (!onlineStatus) {
-                                    // Lost WiFi connection - wait in nowifi screen
-                                    screen::showNowifi();
-                                    isRetrying = true;
-                                    continue;
-                                } else if (retryCount < MAX_RETRIES) {
-                                    // Server request failed but we have WiFi - brief nowifi and retry
-                                    screen::showNowifi();
-                                    vTaskDelay(pdMS_TO_TICKS(1200));
-                                    continue;  // Go back to showing sand and trying again
-                                } else {
-                                    // Max retries reached - stay on nowifi screen
-                                    screen::showNowifi();
-                                    isRetrying = true;
-                                    continue;
-                                }
-                            }
-                            screen::showPaymentQRCodeScreen(qrcodeData);
-                            std::string paymentHash = fetchPaymentHash(qrcodeData);
-                            logger::write("Payment hash: " + paymentHash, "debug");
-                            if (waitForPaymentOrCancel(paymentHash, config::getString("apiKey.key"), qrcodeData)) {
-                                screen::showSuccess();
-                                TickType_t startTime = xTaskGetTickCount();
-                                while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
-                                    if (getTouch() == "*") {
-                                        break;
-                                    }
-                                    vTaskDelay(pdMS_TO_TICKS(50));
-                                }
-                                keysBuffer = "";  // Reset buffer
-                                amount = 0;       // Reset amount
-                                screen::showEnterAmountScreen(0);
-                            } else {
-                                screen::showX();
-                                vTaskDelay(pdMS_TO_TICKS(2100));
-                                keysBuffer = "";  // Reset buffer
-                                amount = 0;       // Reset amount
-                                screen::showEnterAmountScreen(0);
-                            }
-                            break;
-                        } else {
-                            // We're in retry mode (after three failures or lost connection)
-                            const std::string keyPressed = keypad::getPressedKey();
-                            if (keyPressed == "*") {
-                                screen::showX();
-                                keysBuffer = "";  // Reset buffer
-                                amount = 0;       // Reset amount
-                                vTaskDelay(pdMS_TO_TICKS(2100));
-                                esp_restart();
-                            } else if (keyPressed == "#" || onlineStatus) {  // Also retry if WiFi is back
-                                // Try again
-                                retryCount = 0;
-                                isRetrying = false;
-                                continue;
-                            }
-                            // Stay on nowifi screen waiting for user input or WiFi reconnection
-                            vTaskDelay(pdMS_TO_TICKS(100));
-                        }
+                        keysBuffer = "";  // Reset buffer
+                        amount = 0;       // Reset amount
+                        screen::showEnterAmountScreen(0);
+                    } else {
+                        // Payment cancelled or switched to PIN mode
+                        // The unified flow handles the transition internally
+                        // Just reset and return to enter amount screen
+                        keysBuffer = "";  // Reset buffer
+                        amount = 0;       // Reset amount
+                        screen::showEnterAmountScreen(0);
                     }
                 } else {
                     // Show menu when amount is 0 and # is pressed
@@ -265,11 +200,7 @@ void appTask(void* pvParameters) {
             }
         } else if (currentScreen == "paymentPin") {
             if (keyPressed == "#" || keyPressed == "*") {
-                if (!qrcodeDatafallback.empty()) {
-                    screen::showPaymentQRCodeScreen(qrcodeDatafallback);
-                } else {
-                    screen::showPaymentQRCodeScreen(qrcodeData);
-                }
+                screen::showPaymentQRCodeScreen(qrcodeData);
             } else if (keyPressed == "0" || keyPressed == "1" || keyPressed == "2" || keyPressed == "3" || keyPressed == "4" || keyPressed == "5" || keyPressed == "6" || keyPressed == "7" || keyPressed == "8" || keyPressed == "9") {
                 unsigned long currentTime = millis();
                 if (currentTime - lastKeyAddedTime >= KEY_ADD_DELAY) {
