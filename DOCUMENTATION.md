@@ -179,10 +179,8 @@ sequenceDiagram
     
     alt Online Mode & Connected
         Payment->>Payment: Create Monitor Task
-        Payment->>Server: Request Invoice
-        Server-->>Payment: Return Payment Hash
         loop Every 2 seconds
-            Payment->>Server: Check Payment Status
+            Payment->>Server: Check LNURL Payment Status
             Server-->>Payment: Status Response
         end
         Server-->>Payment: Payment Confirmed
@@ -384,9 +382,10 @@ Configuration can be updated via:
    - Show NFC status if enabled
 
 4. **Payment Processing**
-   - **Online Path**: Monitor payment status via API
+   - **Online Path**: Monitor if LNURL has been paid (no invoice creation)
    - **Offline Path**: User enters PIN for verification
    - **Fallback**: Automatic switch to PIN on connection loss
+   - **NFC Only**: Invoice creation via LNURL withdraw from customer's node
 
 5. **Completion**
    - Show success screen
@@ -400,18 +399,21 @@ graph TD
     B -->|Boltcard| C[Read LNURL]
     B -->|NDEF| D[Parse NDEF Records]
     
-    C --> E[Withdraw from LNURL]
+    C --> E[Create Invoice]
     D --> F{Has LNURL?}
     F -->|Yes| E
     F -->|No| G[Show Error]
     
-    E --> H{Success?}
-    H -->|Yes| I[Show Success]
-    H -->|No| J[Show Sand Timer]
-    J --> K[Wait for Payment]
-    K -->|Paid| I
-    K -->|Timeout| G
+    E --> H[Request Customer Node to Pay Invoice]
+    H --> I{LNURL Withdraw Success?}
+    I -->|Yes| J[Show Success]
+    I -->|No| K[Show Sand Timer]
+    K --> L[Wait for Payment]
+    L -->|Paid| J
+    L -->|Timeout| G
 ```
+
+**Important**: Invoice creation ONLY happens for NFC payments using LNURL withdraw from the customer's node. Regular online/offline payments do NOT create invoices.
 
 ## API Integration
 
@@ -420,9 +422,9 @@ graph TD
 The system is designed to work with LNbits API v1:
 
 1. **API Key**: Stored in configuration
-2. **Invoice Creation**: Via `/api/v1/payments` endpoint
-3. **Status Checking**: Polling payment hash endpoint
-4. **Webhook Support**: Optional callback URL
+2. **LNURL Payment Status**: Check if LNURL has been paid (online mode)
+3. **Invoice Creation**: Only used for NFC LNURL withdraw from customer's node
+4. **PIN Verification**: Offline mode verifies PIN locally
 
 ### Security Features
 

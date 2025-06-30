@@ -378,12 +378,14 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
             lastConnectionState = onlineStatus;
         }
 
-        // Check for payment if we're online and have a payment hash
-        if (onlineStatus && onlineMonitorActive && !onlinePaymentHash.empty()) {
+        // Check for payment if we're online
+        if (onlineStatus && onlineMonitorActive) {
             unsigned long currentTime = millis();
             if (currentTime - lastOnlineCheck >= ONLINE_CHECK_INTERVAL) {
-                logger::write("[payment] Checking if online payment made", "info");
-                paymentisMade = isPaymentMade(onlinePaymentHash, config::getString("apiKey.key"));
+                logger::write("[payment] Checking if LNURL payment received", "info");
+                // TODO: Implement LNURL payment status check
+                // For now, online payment monitoring is a placeholder
+                // The server should implement an endpoint to check if the LNURL has been paid
                 lastOnlineCheck = currentTime;
             }
         }
@@ -507,55 +509,23 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
 }
 
 void onlinePaymentMonitorTask(void* pvParameters) {
-    struct InvoiceTaskParams {
-        std::string signedUrl;
+    struct PaymentTaskParams {
+        std::string lnurlQR;
         double amount;
         std::string pin;
     };
     
-    InvoiceTaskParams* params = (InvoiceTaskParams*)pvParameters;
-    std::string signedUrl = params->signedUrl;
+    PaymentTaskParams* params = (PaymentTaskParams*)pvParameters;
+    std::string lnurlQR = params->lnurlQR;
     double amount = params->amount;
     std::string pin = params->pin;
     
-    logger::write("[onlinePaymentMonitorTask] Starting background online payment monitoring", "info");
+    logger::write("[onlinePaymentMonitorTask] Starting online payment monitoring", "info");
+    logger::write("[onlinePaymentMonitorTask] Monitoring LNURL: " + lnurlQR, "info");
     
-    // Reset monitoring flags
-    onlineMonitorActive = false;
-    onlinePaymentHash = "";
-    
-    // Try to get payment hash from the LNURL for online monitoring
-    int retryCount = 0;
-    const int MAX_RETRIES = 3;
-    
-    while (retryCount < MAX_RETRIES && onlineStatus) {
-        logger::write("[onlinePaymentMonitorTask] Attempt " + std::to_string(retryCount + 1), "info");
-        
-        std::string invoice = requestInvoice(signedUrl);
-        if (!invoice.empty()) {
-            std::string paymentHash = fetchPaymentHash(invoice);
-            if (!paymentHash.empty()) {
-                logger::write("[onlinePaymentMonitorTask] Online payment hash obtained successfully", "info");
-                onlinePaymentHash = paymentHash;
-                onlineMonitorActive = true;
-                
-                // Clean up and delete task
-                delete params;
-                onlineMonitorTaskHandle = NULL;
-                vTaskDelete(NULL);
-                return;
-            }
-        }
-        
-        retryCount++;
-        if (retryCount < MAX_RETRIES) {
-            vTaskDelay(pdMS_TO_TICKS(1000)); // Wait 1 second before retry
-        }
-    }
-    
-    logger::write("[onlinePaymentMonitorTask] Online payment hash fetch failed after " + std::to_string(MAX_RETRIES) + " attempts", "info");
-    onlineMonitorActive = false;
-    onlinePaymentHash = "";
+    // For online mode, we just monitor if the LNURL has been paid
+    // We don't fetch any invoice - that's only for NFC LNURL withdraw
+    onlineMonitorActive = true;
     
     // Clean up and delete task
     delete params;
@@ -592,14 +562,14 @@ bool startUnifiedPaymentFlow(const double &amount, const std::string &pin) {
     // Start background task for online payment monitoring
     logger::write("[payment] Starting background online payment monitoring", "info");
     
-    struct InvoiceTaskParams {
-        std::string signedUrl;
+    struct PaymentTaskParams {
+        std::string lnurlQR;
         double amount;
         std::string pin;
     };
     
-    InvoiceTaskParams* params = new InvoiceTaskParams();
-    params->signedUrl = signedUrl;
+    PaymentTaskParams* params = new PaymentTaskParams();
+    params->lnurlQR = lnurlQR;
     params->amount = amount;
     params->pin = pin;
     
