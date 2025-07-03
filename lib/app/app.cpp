@@ -12,6 +12,12 @@ const std::string keyPressed;
 static unsigned long lastKeyAddedTime = 0;
 const unsigned long KEY_ADD_DELAY = 210; // Rate limit in milliseconds
 
+// Payment flow state variables
+PaymentState currentPaymentState = PaymentState::SHOWING_QR;
+std::string currentPaymentLNURL = "";
+std::string currentPaymentPin = "";
+bool isInPaymentFlow = false;
+
 void appendToKeyBuffer(const std::string &key) {
 	unsigned long currentTime = millis();
 	if (currentTime - lastKeyAddedTime >= KEY_ADD_DELAY) {
@@ -73,6 +79,50 @@ void handleSleepMode() {
 	}
 }
 
+void handlePaymentFlow() {
+    if (!isInPaymentFlow) {
+        return;
+    }
+    
+    PaymentState newState = checkPaymentStatus(currentPaymentLNURL, currentPaymentPin);
+    
+    if (newState != currentPaymentState) {
+        currentPaymentState = newState;
+        
+        switch (currentPaymentState) {
+            case PaymentState::PAYMENT_SUCCESS:
+                logger::write("[app] Payment successful", "info");
+                screen::showSuccess();
+                cleanupPaymentFlow();
+                isInPaymentFlow = false;
+                // Will be handled in main loop to return to amount entry
+                break;
+                
+            case PaymentState::SHOWING_QR:
+                if (!onlineStatus) {
+                    screen::showNowifi();
+                } else {
+                    screen::showPaymentQRCodeScreen(currentPaymentLNURL);
+                }
+                break;
+                
+            case PaymentState::MONITORING_PAYMENT:
+                screen::showPaymentQRCodeScreen(currentPaymentLNURL);
+                break;
+                
+            case PaymentState::ERROR:
+                logger::write("[app] Payment flow error", "error");
+                screen::showX();
+                cleanupPaymentFlow();
+                isInPaymentFlow = false;
+                break;
+                
+            default:
+                break;
+        }
+    }
+}
+
 void appTask(void* pvParameters) {
     Serial.println("App task started");
     static unsigned long lastPopTime = 0;
@@ -86,10 +136,28 @@ void appTask(void* pvParameters) {
             logger::loop();
             jsonRpc::loop();
         }
+        
+        // Handle payment flow if active
+        handlePaymentFlow();
         const std::string currentScreen = screen::getCurrentScreen();
         if (currentScreen == "") {
             keysBuffer = "";
             screen::showEnterAmountScreen(keysToAmount(keysBuffer));
+        }
+        
+        // Handle successful payment completion
+        if (currentScreen == "success" && !isInPaymentFlow) {
+            TickType_t startTime = xTaskGetTickCount();
+            bool skipWait = false;
+            while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200) && !skipWait) {
+                if (getTouch() == "*") {
+                    skipWait = true;
+                }
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+            keysBuffer = "";  // Reset buffer
+            amount = 0;       // Reset amount
+            screen::showEnterAmountScreen(0);
         }
         const std::string keyPressed = keypad::getPressedKey();
         if (keyPressed != "") {
@@ -139,6 +207,7 @@ void appTask(void* pvParameters) {
             } else if (keyPressed == "#") {
                 amount = keysToAmount(keysBuffer);
                 if (amount > 0) {
+                    // Initialize payment flow
                     qrcodeData = "";
                     pin = util::generateRandomPin();
                     if (config::getString("fiatCurrency") == "sat") {
@@ -146,27 +215,20 @@ void appTask(void* pvParameters) {
                         amount = amount / 100;
                     }
 
-                    // Use unified payment flow v3.0.0
-                    logger::write("Starting unified payment flow v3.0.0", "info");
-                    bool paymentResult = startUnifiedPaymentFlow(amount, pin);
+                    // Start new payment flow v3.0.0
+                    logger::write("Starting payment flow v3.0.0", "info");
+                    currentPaymentState = initializePaymentFlow(amount, pin, currentPaymentLNURL);
+                    currentPaymentPin = pin;
+                    isInPaymentFlow = true;
                     
-                    if (paymentResult) {
-                        // Payment successful - show success screen
-                        screen::showSuccess();
-                        TickType_t startTime = xTaskGetTickCount();
-                        while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
-                            if (getTouch() == "*") {
-                                break;
-                            }
-                            vTaskDelay(pdMS_TO_TICKS(50));
-                        }
-                        keysBuffer = "";  // Reset buffer
-                        amount = 0;       // Reset amount
-                        screen::showEnterAmountScreen(0);
-                    } else {
-                        // Payment cancelled or switched to PIN mode
-                        // The unified flow handles the transition internally
-                        // Just reset and return to enter amount screen
+                    // Show initial payment screen
+                    if (currentPaymentState == PaymentState::SHOWING_QR) {
+                        screen::showPaymentQRCodeScreen(currentPaymentLNURL);
+                    } else if (currentPaymentState == PaymentState::MONITORING_PAYMENT) {
+                        screen::showPaymentQRCodeScreen(currentPaymentLNURL);
+                    } else if (currentPaymentState == PaymentState::ERROR) {
+                        screen::showX();
+                        isInPaymentFlow = false;
                         keysBuffer = "";  // Reset buffer
                         amount = 0;       // Reset amount
                         screen::showEnterAmountScreen(0);
@@ -187,12 +249,35 @@ void appTask(void* pvParameters) {
             }
         } else if (currentScreen == "paymentQRCode") {
             if (keyPressed == "#") {
-                pinBuffer = "";
-                screen::showPaymentPinScreen(pinBuffer);
+                if (isInPaymentFlow) {
+                    // Switch to PIN entry mode during payment flow
+                    logger::write("[app] Switching to PIN entry mode", "info");
+                    cleanupPaymentFlow();
+                    isInPaymentFlow = false;
+                    pinBuffer = "";
+                    screen::showPaymentPinScreen(pinBuffer);
+                } else {
+                    // Legacy behavior for non-payment flow QR codes
+                    pinBuffer = "";
+                    screen::showPaymentPinScreen(pinBuffer);
+                }
             } else if (keyPressed == "*" || getLongTouch('*', 210)) { 
-                screen::showX();
-                vTaskDelay(pdMS_TO_TICKS(2100));
-                screen::showHomeScreen();
+                if (isInPaymentFlow) {
+                    // Cancel payment flow
+                    logger::write("[app] Payment cancelled by user", "info");
+                    cleanupPaymentFlow();
+                    isInPaymentFlow = false;
+                    screen::showX();
+                    vTaskDelay(pdMS_TO_TICKS(2100));
+                    keysBuffer = "";  // Reset buffer
+                    amount = 0;       // Reset amount
+                    screen::showEnterAmountScreen(0);
+                } else {
+                    // Legacy behavior
+                    screen::showX();
+                    vTaskDelay(pdMS_TO_TICKS(2100));
+                    screen::showHomeScreen();
+                }
             } else if (keyPressed == "1") {
                 screen::adjustContrast(-10);// decrease contrast
             } else if (keyPressed == "4") {
@@ -207,7 +292,7 @@ void appTask(void* pvParameters) {
                     pinBuffer += keyPressed;
                     lastKeyAddedTime = currentTime;
                     if (pinBuffer.length() == 4) {
-                        if (pinBuffer == pin) {
+                        if (pinBuffer == pin || pinBuffer == currentPaymentPin) {
                             screen::showSuccess();
                             pinBuffer = "";
                             TickType_t startTime = xTaskGetTickCount();
@@ -217,7 +302,14 @@ void appTask(void* pvParameters) {
                                 }
                                 vTaskDelay(pdMS_TO_TICKS(50)); // Check for input every 50ms
                             }
-                            screen::showHomeScreen();
+                            // Reset payment flow if we were in one
+                            if (isInPaymentFlow) {
+                                keysBuffer = "";  // Reset buffer
+                                amount = 0;       // Reset amount
+                                screen::showEnterAmountScreen(0);
+                            } else {
+                                screen::showHomeScreen();
+                            }
                         } else {
                             screen::showX();
                             pinBuffer = "";
@@ -226,7 +318,14 @@ void appTask(void* pvParameters) {
                                 pinBuffer = "";
                                 incorrectPinAttempts = 0;
                                 vTaskDelay(pdMS_TO_TICKS(2100));
-                                screen::showHomeScreen();
+                                // Reset payment flow if we were in one
+                                if (isInPaymentFlow) {
+                                    keysBuffer = "";  // Reset buffer
+                                    amount = 0;       // Reset amount
+                                    screen::showEnterAmountScreen(0);
+                                } else {
+                                    screen::showHomeScreen();
+                                }
                             } else {
                                 vTaskDelay(pdMS_TO_TICKS(420));
                                 screen::showPaymentPinScreen(pinBuffer);

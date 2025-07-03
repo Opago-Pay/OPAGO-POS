@@ -7,6 +7,16 @@
 #include "keypad.h"
 #include "nfc.h"
 
+// Payment flow states
+enum class PaymentState {
+    SHOWING_QR,
+    MONITORING_PAYMENT,
+    PAYMENT_SUCCESS,
+    PAYMENT_CANCELLED,
+    SWITCH_TO_PIN,
+    ERROR
+};
+
 extern String lnurlwNFC;
 extern EventGroupHandle_t nfcEventGroup;
 extern EventGroupHandle_t appEventGroup;
@@ -30,3 +40,9 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
 void onlinePaymentMonitorTask(void* pvParameters);
 bool startUnifiedPaymentFlow(const double &amount, const std::string &pin);
 bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &pin);
+
+// New functions for refactored payment flow
+PaymentState initializePaymentFlow(const double &amount, const std::string &pin, std::string &lnurlQR);
+PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &pin);
+void cleanupPaymentFlow();
+bool isPaymentFlowActive();

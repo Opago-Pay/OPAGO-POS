@@ -28,10 +28,17 @@ extern bool isFakeSleeping;
 extern bool offlineMode;
 extern bool offlineOnly;
 
+// Payment flow state variables
+extern PaymentState currentPaymentState;
+extern std::string currentPaymentLNURL;
+extern std::string currentPaymentPin;
+extern bool isInPaymentFlow;
+
 void appendToKeyBuffer(const std::string &key);
 std::string leftTrimZeros(const std::string &keys);
 double keysToAmount(const std::string &t_keys);
 void handleSleepMode();
 void appTask(void* pvParameters);
+void handlePaymentFlow();
 
 #endif // APP_H

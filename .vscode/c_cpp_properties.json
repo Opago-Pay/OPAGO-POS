@@ -598,7 +598,7 @@
                 "SPI_FREQUENCY=27000000",
                 "CONFIG_HEAP_POISONING_COMPREHENSIVE",
                 "FIRMWARE_NAME=OPAGO POS",
-                "FIRMWARE_VERSION=v2.1.0",
+                "FIRMWARE_VERSION=v3.0.0-beta.1",
                 "FIRMWARE_COMMIT_HASH=",
                 "HAVE_CONFIG_H",
                 "MBEDTLS_CONFIG_FILE=\"mbedtls/esp_config.h\"",

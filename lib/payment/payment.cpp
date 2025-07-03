@@ -585,3 +585,129 @@ bool startUnifiedPaymentFlow(const double &amount, const std::string &pin) {
     // Wait for payment with fallback handling
     return waitForPaymentWithFallback(lnurlQR, pin);
 }
+
+// New refactored payment flow functions
+PaymentState initializePaymentFlow(const double &amount, const std::string &pin, std::string &lnurlQR) {
+    logger::write("[payment] Initializing payment flow v3.0.0", "info");
+    
+    // Always generate LNURL QR (same for both online/offline)
+    std::string signedUrl = util::createLnurlPay(amount, pin);
+    lnurlQR = config::getString("uriSchemaPrefix") + 
+              util::toUpperCase(util::lnurlEncode(signedUrl));
+    
+    // Set the global qrcodeData for compatibility
+    qrcodeData = lnurlQR;
+    
+    // Check if we're in demo mode
+    if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || 
+        config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
+        logger::write("[payment] Demo mode detected", "info");
+        lnurlQR = "https://opago-pay.com/getstarted";
+        return PaymentState::SHOWING_QR;
+    }
+    
+    // Initialize NFC if enabled
+    if (config::getBool("nfcEnabled")) {
+        cap.setThresholds(5, 5);
+        vTaskResume(nfcTaskHandle);
+        xEventGroupClearBits(nfcEventGroup, (1 << 1));
+        xEventGroupSetBits(nfcEventGroup, (1 << 0));
+    }
+    
+    // If we're in offline-only mode, just show QR
+    if (offlineMode || !onlineStatus) {
+        logger::write("[payment] Offline mode - showing LNURL QR only", "info");
+        return PaymentState::SHOWING_QR;
+    }
+    
+    // Start background task for online payment monitoring
+    logger::write("[payment] Starting background online payment monitoring", "info");
+    
+    struct PaymentTaskParams {
+        std::string lnurlQR;
+        double amount;
+        std::string pin;
+    };
+    
+    PaymentTaskParams* params = new PaymentTaskParams();
+    params->lnurlQR = lnurlQR;
+    params->amount = amount;
+    params->pin = pin;
+    
+    // Create background task for online payment monitoring
+    BaseType_t result = xTaskCreate(
+        onlinePaymentMonitorTask,
+        "OnlinePaymentMonitor",
+        4096,
+        params,
+        2,
+        &onlineMonitorTaskHandle
+    );
+    
+    if (result != pdPASS) {
+        logger::write("[payment] Failed to create online monitor task", "error");
+        delete params;
+        return PaymentState::ERROR;
+    }
+    
+    return PaymentState::MONITORING_PAYMENT;
+}
+
+PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &pin) {
+    // Check connection state
+    static bool lastConnectionState = onlineStatus;
+    if (lastConnectionState != onlineStatus) {
+        lastConnectionState = onlineStatus;
+        if (!onlineStatus) {
+            return PaymentState::SHOWING_QR; // Will trigger no-wifi screen in app
+        }
+    }
+    
+    // Check if payment was made
+    if (paymentisMade) {
+        return PaymentState::PAYMENT_SUCCESS;
+    }
+    
+    // Check for NFC card detection
+    if (config::getBool("nfcEnabled")) {
+        EventBits_t uxBits = xEventGroupWaitBits(appEventGroup, (1 << 0), pdFALSE, pdFALSE, 0);
+        if ((uxBits & (1 << 0)) != 0) {
+            logger::write("[payment] Card detected, checking payment", "info");
+            vTaskDelay(pdMS_TO_TICKS(100)); // Brief delay for card processing
+            return PaymentState::MONITORING_PAYMENT;
+        }
+    }
+    
+    return PaymentState::MONITORING_PAYMENT;
+}
+
+void cleanupPaymentFlow() {
+    logger::write("[payment] Cleaning up payment flow", "info");
+    
+    // Clean up NFC if enabled
+    if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
+        EventBits_t uxBits;
+        xEventGroupClearBits(nfcEventGroup, (1 << 0));
+        xEventGroupSetBits(nfcEventGroup, (1 << 1));
+        uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
+        if ((uxBits & (1 << 1)) != 0) {
+            vTaskSuspend(nfcTaskHandle);
+        }
+        cap.setThresholds(3, 5); // Restore normal sensitivity
+    }
+    
+    // Clean up online monitor task
+    if (onlineMonitorTaskHandle != NULL) {
+        vTaskDelete(onlineMonitorTaskHandle);
+        onlineMonitorTaskHandle = NULL;
+    }
+    
+    // Reset payment state
+    paymentisMade = false;
+    connectionLoss = false;
+    onlineMonitorActive = false;
+}
+
+bool isPaymentFlowActive() {
+    return onlineMonitorActive || (onlineMonitorTaskHandle != NULL);
+}
