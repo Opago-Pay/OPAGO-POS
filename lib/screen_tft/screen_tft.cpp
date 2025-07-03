@@ -123,7 +123,8 @@ namespace {
 		const int16_t y,
 		const uint16_t &max_w,
 		const uint16_t &max_h,
-		const bool &center = true
+		const bool &center = true,
+		const bool &maximizeSize = false
 	) {
 		BoundingBox bbox;
 		try {
@@ -137,26 +138,41 @@ namespace {
 				const int8_t result = qrcode_initText(&qrcode, qrcodeData, version, ECC_LOW, data);
 				if (result == 0) {
 					// QR encoding successful.
-					scale = std::min(std::floor(max_w / qrcode.size), std::floor(max_h / qrcode.size));
-					const uint16_t w = qrcode.size * scale;
-					const uint16_t h = w;
+					uint8_t border_modules = maximizeSize ? 1 : 4; // Minimum 1 module border for readability
+					uint8_t total_size = qrcode.size + (border_modules * 2);
+					
+					scale = std::min(std::floor(max_w / total_size), std::floor(max_h / total_size));
+					const uint16_t qr_module_size = qrcode.size * scale;
+					const uint16_t border_size = border_modules * scale;
+					const uint16_t total_w = qr_module_size + (border_size * 2);
+					const uint16_t total_h = total_w;
+					
 					int16_t box_x = x;
 					int16_t box_y = y;
 					if (center) {
-						box_x -= (w / 2);
-						box_y -= (h / 2);
+						box_x -= (total_w / 2);
+						box_y -= (total_h / 2);
 					}
-					tft.fillRect(box_x, box_y, w, h, textColor);
+					
+					// Draw white background (includes border)
+					tft.fillRect(box_x, box_y, total_w, total_h, textColor);
+					
+					// Draw black QR modules
+					int16_t qr_start_x = box_x + border_size;
+					int16_t qr_start_y = box_y + border_size;
+					
 					for (uint8_t y = 0; y < qrcode.size; y++) {
 						for (uint8_t x = 0; x < qrcode.size; x++) {
-							const auto color = qrcode_getModule(&qrcode, x, y) ? bgColor : textColor;
-							tft.fillRect(box_x + scale*x, box_y + scale*y, scale, scale, color);
+							if (qrcode_getModule(&qrcode, x, y)) {
+								tft.fillRect(qr_start_x + (x * scale), qr_start_y + (y * scale), scale, scale, bgColor);
+							}
 						}
 					}
+					
 					bbox.x = box_x;
 					bbox.y = box_y;
-					bbox.w = w;
-					bbox.h = h;
+					bbox.w = total_w;
+					bbox.h = total_h;
 					break;
 				} else if (result == -2) {
 					// Data was too long for the QR code version.
@@ -167,15 +183,6 @@ namespace {
 					throw std::runtime_error("Unknown failure case");
 				}
 			}
-			// Draw a border around the QR code - to improve readability.
-			const uint8_t margin_x = std::min(scale, (uint8_t)std::floor((screenWidth - bbox.w) / 2));
-			const uint8_t margin_y = std::min(scale, (uint8_t)std::floor((tft.height() - bbox.h) / 2));
-			const uint16_t border_x = bbox.x - margin_x;
-			const uint16_t border_y = bbox.y - margin_y;
-			tft.fillRect(border_x, border_y, margin_x, bbox.h + (margin_y * 2), textColor);// left
-			tft.fillRect(bbox.x + bbox.w, border_y, margin_x, bbox.h + (margin_y * 2), textColor);// right
-			tft.fillRect(bbox.x, border_y, bbox.w, margin_y, textColor);// top
-			tft.fillRect(bbox.x, bbox.y + bbox.h, bbox.w, margin_y, textColor);// bottom
 		} catch (const std::exception &e) {
 			std::cerr << e.what() << std::endl;
 			logger::write("Error while rendering QR code: " + std::string(e.what()), "error");
@@ -323,58 +330,24 @@ namespace screen_tft {
 			renderText("Scan for Setup", Courier_Prime_Code12pt8b, TFT_WHITE, center_x, tft.height() - textOffsetY, TC_DATUM);
 			renderText("opago-pay.com/getstarted", Courier_Prime_Code10pt8b, TFT_WHITE, center_x, tft.height() - (textOffsetY - 17), TC_DATUM);
 		} else {
-			// Normal payment mode (not demo)
+			// Normal payment mode
 			std::string amountStr = getAmountFiatCurrencyString(amount);
 			std::string currency = config::getString("fiatCurrency");
 			
-			// Position amount text at the very top with original font
+			// Position amount text at the very top
 			renderText(amountStr, Courier_Prime_Code12pt8b, TFT_WHITE, center_x, 5, TC_DATUM);
 			
-			// Calculate QR code area - absolutely maximize screen usage
-			int16_t qr_top_margin = 25; // Minimal top margin
+			// Calculate QR code area - maximize screen usage
+			int16_t qr_top_margin = 25; // Minimal top margin for amount text
 			int16_t qr_bottom_margin = 12; // Just enough for icons
 			
-			// Calculate maximum QR dimensions - use full width
+			// Calculate maximum QR dimensions
 			int16_t qr_max_width = screenWidth;
 			int16_t qr_max_height = tft.height() - qr_top_margin - qr_bottom_margin;
+			int16_t qr_center_y = qr_top_margin + (qr_max_height / 2);
 			
-			// Render QR code without automatic borders to maximize size
-			// We'll render it manually to avoid the border reduction
-			const char* data = qrcodeData.c_str();
-			uint8_t qrVersion = 1;
-			while (qrVersion <= 40) {
-				const uint16_t bufferSize = qrcode_getBufferSize(qrVersion);
-				QRCode qrcode;
-				uint8_t qrcodeDataBuffer[bufferSize];
-				const int8_t result = qrcode_initText(&qrcode, qrcodeDataBuffer, qrVersion, ECC_LOW, data);
-				if (result == 0) {
-					// Calculate scale to fill available space
-					uint8_t scale = std::min(qr_max_width / qrcode.size, qr_max_height / qrcode.size);
-					uint16_t qr_size = qrcode.size * scale;
-					
-					// Center the QR code
-					int16_t qr_x = (screenWidth - qr_size) / 2;
-					int16_t qr_y = qr_top_margin + ((qr_max_height - qr_size) / 2);
-					
-					// Draw white background
-					tft.fillRect(qr_x, qr_y, qr_size, qr_size, textColor);
-					
-					// Draw QR modules
-					for (uint8_t y = 0; y < qrcode.size; y++) {
-						for (uint8_t x = 0; x < qrcode.size; x++) {
-							if (qrcode_getModule(&qrcode, x, y)) {
-								tft.fillRect(qr_x + (x * scale), qr_y + (y * scale), scale, scale, bgColor);
-							}
-						}
-					}
-					break;
-				} else if (result == -2) {
-					qrVersion++;
-				} else {
-					logger::write("QR code generation failed", "error");
-					break;
-				}
-			}
+			// Render QR code with maximum size optimization
+			renderQRCode(qrcodeData, center_x, qr_center_y, qr_max_width, qr_max_height, true, true);
 			currentPaymentQRCodeData = qrcodeData;
 			
 			// Log the displayed LNURL with amount and currency
