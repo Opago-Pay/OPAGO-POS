@@ -789,8 +789,8 @@ bool checkPosPaymentStatus(const std::string &posId, const std::string &apiKey, 
             xSemaphoreGive(wifiSemaphore);
             delete http;
             
-            // Only consider payment successful if status is "paid" AND PIN matches
-            if (status == "paid") {
+            // Only consider payment successful if status is "paid" or "success" AND PIN matches
+            if (status == "paid" || status == "success") {
                 if (!returnedPin.empty() && returnedPin == expectedPin) {
                     logger::write("[payment] Payment confirmed with matching PIN", "info");
                     return true;
@@ -798,7 +798,7 @@ bool checkPosPaymentStatus(const std::string &posId, const std::string &apiKey, 
                     logger::write("[payment] Payment confirmed but no PIN returned from API", "warning");
                     return true;
                 } else {
-                    logger::write("[payment] Payment status is 'paid' but PIN doesn't match. Expected: " + expectedPin + ", Got: " + returnedPin, "debug");
+                    logger::write("[payment] Payment status is '" + status + "' but PIN doesn't match. Expected: " + expectedPin + ", Got: " + returnedPin, "debug");
                     return false;
                 }
             }
