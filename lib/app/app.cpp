@@ -259,18 +259,17 @@ void appTask(void* pvParameters) {
         } else if (currentScreen == "paymentQRCode") {
             if (keyPressed == "#") {
                 if (isInPaymentFlow) {
-                    // Switch to PIN entry mode during payment flow
-                    logger::write("[app] Switching to PIN entry mode", "info");
-                    cleanupPaymentFlow();
-                    isInPaymentFlow = false;
+                    // Switch to PIN entry mode during payment flow but KEEP polling active
+                    logger::write("[app] Switching to PIN entry mode while keeping payment flow active", "info");
                     pinBuffer = "";
                     screen::showPaymentPinScreen(pinBuffer);
+                    // DO NOT call cleanupPaymentFlow() - keep polling active!
                 } else {
                     // Legacy behavior for non-payment flow QR codes
                     pinBuffer = "";
                     screen::showPaymentPinScreen(pinBuffer);
                 }
-            } else if (keyPressed == "*" || getLongTouch('*', 210)) { 
+            } else if (keyPressed == "*") {
                 if (isInPaymentFlow) {
                     // Cancel payment flow
                     logger::write("[app] Payment cancelled by user", "info");
@@ -294,7 +293,12 @@ void appTask(void* pvParameters) {
             }
         } else if (currentScreen == "paymentPin") {
             if (keyPressed == "#" || keyPressed == "*") {
-                screen::showPaymentQRCodeScreen(qrcodeData);
+                // Return to payment QR code screen (keep payment flow active if it exists)
+                if (isInPaymentFlow) {
+                    screen::showPaymentQRCodeScreen(currentPaymentLNURL);
+                } else {
+                    screen::showPaymentQRCodeScreen(qrcodeData);
+                }
             } else if (keyPressed == "0" || keyPressed == "1" || keyPressed == "2" || keyPressed == "3" || keyPressed == "4" || keyPressed == "5" || keyPressed == "6" || keyPressed == "7" || keyPressed == "8" || keyPressed == "9") {
                 unsigned long currentTime = millis();
                 if (currentTime - lastKeyAddedTime >= KEY_ADD_DELAY) {
@@ -313,6 +317,8 @@ void appTask(void* pvParameters) {
                             }
                             // Reset payment flow if we were in one
                             if (isInPaymentFlow) {
+                                cleanupPaymentFlow();
+                                isInPaymentFlow = false;
                                 keysBuffer = "";  // Reset buffer
                                 amount = 0;       // Reset amount
                                 screen::showEnterAmountScreen(0);
