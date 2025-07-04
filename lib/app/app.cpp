@@ -16,6 +16,7 @@ const unsigned long KEY_ADD_DELAY = 210; // Rate limit in milliseconds
 PaymentState currentPaymentState = PaymentState::SHOWING_QR;
 std::string currentPaymentLNURL = "";
 std::string currentPaymentPin = "";
+std::string apiReturnedPin = "";  // PIN returned from API for verification
 bool isInPaymentFlow = false;
 
 void appendToKeyBuffer(const std::string &key) {
@@ -108,6 +109,14 @@ void handlePaymentFlow() {
                 
             case PaymentState::MONITORING_PAYMENT:
                 screen::showPaymentQRCodeScreen(currentPaymentLNURL);
+                break;
+                
+            case PaymentState::PAYMENT_CANCELLED:
+                logger::write("[app] Payment timeout - invoice expired after 60 minutes", "info");
+                screen::showX();
+                cleanupPaymentFlow();
+                isInPaymentFlow = false;
+                // Will be handled in main loop to return to amount entry
                 break;
                 
             case PaymentState::ERROR:
@@ -292,7 +301,7 @@ void appTask(void* pvParameters) {
                     pinBuffer += keyPressed;
                     lastKeyAddedTime = currentTime;
                     if (pinBuffer.length() == 4) {
-                        if (pinBuffer == pin || pinBuffer == currentPaymentPin) {
+                        if (pinBuffer == pin || pinBuffer == currentPaymentPin || pinBuffer == apiReturnedPin) {
                             screen::showSuccess();
                             pinBuffer = "";
                             TickType_t startTime = xTaskGetTickCount();

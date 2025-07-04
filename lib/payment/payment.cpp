@@ -2,9 +2,8 @@
 
 uint8_t lastRenderedQRCode = 0;
 bool lastConnectionLossState = false;
-TaskHandle_t onlineMonitorTaskHandle = NULL;
-bool onlineMonitorActive = false;
 std::string onlinePaymentHash = "";
+unsigned long paymentStartTime = 0;
 
 std::string parseCallbackUrl(const std::string &response) {
     DynamicJsonDocument doc(1024);
@@ -379,13 +378,30 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
         }
 
         // Check for payment if we're online
-        if (onlineStatus && onlineMonitorActive) {
+        if (onlineStatus) {
             unsigned long currentTime = millis();
             if (currentTime - lastOnlineCheck >= ONLINE_CHECK_INTERVAL) {
                 logger::write("[payment] Checking if LNURL payment received", "info");
-                // TODO: Implement LNURL payment status check
-                // For now, online payment monitoring is a placeholder
-                // The server should implement an endpoint to check if the LNURL has been paid
+                
+                // Check POS status API for payment
+                std::string posId = extractPosIdFromCallbackUrl();
+                std::string apiKey = config::getString("apiKey.key");
+                std::string returnedPin;
+                
+                if (!posId.empty()) {
+                    bool paymentReceived = checkPosPaymentStatus(posId, apiKey, pin, returnedPin);
+                    if (paymentReceived) {
+                        logger::write("[payment] Payment confirmed via POS status API", "info");
+                        if (!returnedPin.empty()) {
+                            logger::write("[payment] Using API PIN for verification: " + returnedPin, "info");
+                            // Update the global API PIN for verification
+                            extern std::string apiReturnedPin;
+                            apiReturnedPin = returnedPin;
+                        }
+                        paymentisMade = true;
+                    }
+                }
+                
                 lastOnlineCheck = currentTime;
             }
         }
@@ -415,11 +431,7 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
                      }
                  }
                  
-                 // Clean up online monitor task
-                 if (onlineMonitorTaskHandle != NULL) {
-                     vTaskDelete(onlineMonitorTaskHandle);
-                     onlineMonitorTaskHandle = NULL;
-                 }
+                 // No task cleanup needed - using direct API calls
                  
                  // Transition to PIN screen
                  screen::showPaymentPinScreen("");
@@ -431,11 +443,7 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
                  // Switch to PIN entry mode
                  logger::write("[payment] Switching to PIN entry mode", "info");
                  
-                 // Clean up online monitor task
-                 if (onlineMonitorTaskHandle != NULL) {
-                     vTaskDelete(onlineMonitorTaskHandle);
-                     onlineMonitorTaskHandle = NULL;
-                 }
+                 // No task cleanup needed - using direct API calls
                  
                  // Transition to PIN screen
                  screen::showPaymentPinScreen("");
@@ -457,11 +465,7 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
                 }
             }
             
-            // Clean up online monitor task
-            if (onlineMonitorTaskHandle != NULL) {
-                vTaskDelete(onlineMonitorTaskHandle);
-                onlineMonitorTaskHandle = NULL;
-            }
+            // No task cleanup needed - using direct API calls
             
             return false;
         }
@@ -493,11 +497,7 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
             }
         }
         
-        // Clean up online monitor task
-        if (onlineMonitorTaskHandle != NULL) {
-            vTaskDelete(onlineMonitorTaskHandle);
-            onlineMonitorTaskHandle = NULL;
-        }
+        // No task cleanup needed - using direct API calls
     }
 
     logger::write("[payment] Returning to App Loop", "debug");
@@ -508,30 +508,7 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
     return paymentisMade;
 }
 
-void onlinePaymentMonitorTask(void* pvParameters) {
-    struct PaymentTaskParams {
-        std::string lnurlQR;
-        double amount;
-        std::string pin;
-    };
-    
-    PaymentTaskParams* params = (PaymentTaskParams*)pvParameters;
-    std::string lnurlQR = params->lnurlQR;
-    double amount = params->amount;
-    std::string pin = params->pin;
-    
-    logger::write("[onlinePaymentMonitorTask] Starting online payment monitoring", "info");
-    logger::write("[onlinePaymentMonitorTask] Monitoring LNURL: " + lnurlQR, "info");
-    
-    // For online mode, we just monitor if the LNURL has been paid
-    // We don't fetch any invoice - that's only for NFC LNURL withdraw
-    onlineMonitorActive = true;
-    
-    // Clean up and delete task
-    delete params;
-    onlineMonitorTaskHandle = NULL;
-    vTaskDelete(NULL);
-}
+// Task-based payment monitoring removed - using direct API calls instead
 
 bool startUnifiedPaymentFlow(const double &amount, const std::string &pin) {
     logger::write("[payment] Starting unified payment flow v3.0.0", "info");
@@ -559,28 +536,8 @@ bool startUnifiedPaymentFlow(const double &amount, const std::string &pin) {
         return waitForPaymentWithFallback(lnurlQR, pin);
     }
     
-    // Start background task for online payment monitoring
-    logger::write("[payment] Starting background online payment monitoring", "info");
-    
-    struct PaymentTaskParams {
-        std::string lnurlQR;
-        double amount;
-        std::string pin;
-    };
-    
-    PaymentTaskParams* params = new PaymentTaskParams();
-    params->lnurlQR = lnurlQR;
-    params->amount = amount;
-    params->pin = pin;
-    
-    // Create background task for online payment monitoring
-    if (xTaskCreate(onlinePaymentMonitorTask, "onlineMonitor", 8192, params, 1, &onlineMonitorTaskHandle) != pdPASS) {
-        logger::write("[payment] Failed to create online monitor task, falling back to offline only", "error");
-        delete params;
-        onlineMonitorTaskHandle = NULL;
-        screen::showPaymentQRCodeScreen(lnurlQR);
-        return waitForPaymentWithFallback(lnurlQR, pin);
-    }
+    // Online mode - payment status will be checked directly in waitForPaymentWithFallback
+    logger::write("[payment] Online mode - will check POS status API directly", "info");
     
     // Wait for payment with fallback handling
     return waitForPaymentWithFallback(lnurlQR, pin);
@@ -589,6 +546,15 @@ bool startUnifiedPaymentFlow(const double &amount, const std::string &pin) {
 // New refactored payment flow functions
 PaymentState initializePaymentFlow(const double &amount, const std::string &pin, std::string &lnurlQR) {
     logger::write("[payment] Initializing payment flow v3.0.0", "info");
+    
+    // Clear any previous API PIN
+    extern std::string apiReturnedPin;
+    apiReturnedPin = "";
+    
+    // Reset payment start time for 60-minute timeout
+    extern unsigned long paymentStartTime;
+    paymentStartTime = millis();
+    logger::write("[payment] Payment timeout set for 60 minutes", "info");
     
     // Always generate LNURL QR (same for both online/offline)
     std::string signedUrl = util::createLnurlPay(amount, pin);
@@ -620,36 +586,8 @@ PaymentState initializePaymentFlow(const double &amount, const std::string &pin,
         return PaymentState::SHOWING_QR;
     }
     
-    // Start background task for online payment monitoring
-    logger::write("[payment] Starting background online payment monitoring", "info");
-    
-    struct PaymentTaskParams {
-        std::string lnurlQR;
-        double amount;
-        std::string pin;
-    };
-    
-    PaymentTaskParams* params = new PaymentTaskParams();
-    params->lnurlQR = lnurlQR;
-    params->amount = amount;
-    params->pin = pin;
-    
-    // Create background task for online payment monitoring
-    BaseType_t result = xTaskCreate(
-        onlinePaymentMonitorTask,
-        "OnlinePaymentMonitor",
-        4096,
-        params,
-        2,
-        &onlineMonitorTaskHandle
-    );
-    
-    if (result != pdPASS) {
-        logger::write("[payment] Failed to create online monitor task", "error");
-        delete params;
-        return PaymentState::ERROR;
-    }
-    
+    // Online mode - we'll check the POS status API directly in the main loop
+    logger::write("[payment] Online mode - will check POS status API", "info");
     return PaymentState::MONITORING_PAYMENT;
 }
 
@@ -663,9 +601,30 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
         }
     }
     
-    // Check if payment was made
+    // Check if payment was already made
     if (paymentisMade) {
         return PaymentState::PAYMENT_SUCCESS;
+    }
+    
+    // Check for 60-minute timeout (3600000 ms = 60 minutes)
+    if (paymentStartTime > 0) {
+        unsigned long currentTime = millis();
+        const unsigned long PAYMENT_TIMEOUT_MS = 3600000; // 60 minutes
+        
+        // Handle millis() overflow (occurs every ~50 days)
+        unsigned long elapsedTime;
+        if (currentTime >= paymentStartTime) {
+            elapsedTime = currentTime - paymentStartTime;
+        } else {
+            // millis() has overflowed
+            elapsedTime = (ULONG_MAX - paymentStartTime) + currentTime + 1;
+        }
+        
+        if (elapsedTime >= PAYMENT_TIMEOUT_MS) {
+            logger::write("[payment] Payment timeout reached (60 minutes), cancelling payment", "info");
+            paymentStartTime = 0; // Reset timeout
+            return PaymentState::PAYMENT_CANCELLED;
+        }
     }
     
     // Check for NFC card detection
@@ -678,11 +637,51 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
         }
     }
     
+    // Check for payment via POS status API if we're online
+    if (onlineStatus) {
+        static unsigned long lastOnlineCheck = 0;
+        const unsigned long ONLINE_CHECK_INTERVAL = 2100; // Check every 2.1 seconds
+        
+        unsigned long currentTime = millis();
+        if (currentTime - lastOnlineCheck >= ONLINE_CHECK_INTERVAL) {
+            logger::write("[payment] Checking POS status API for payment", "info");
+            
+            // Check POS status API for payment
+            std::string posId = extractPosIdFromCallbackUrl();
+            std::string apiKey = config::getString("apiKey.key");
+            std::string returnedPin;
+            
+            if (!posId.empty() && !apiKey.empty()) {
+                logger::write("[payment] Polling POS ID: " + posId, "debug");
+                bool paymentReceived = checkPosPaymentStatus(posId, apiKey, pin, returnedPin);
+                if (paymentReceived) {
+                    logger::write("[payment] Payment confirmed via POS status API!", "info");
+                    if (!returnedPin.empty()) {
+                        logger::write("[payment] Using API PIN for verification: " + returnedPin, "info");
+                        // Update the global API PIN for verification
+                        extern std::string apiReturnedPin;
+                        apiReturnedPin = returnedPin;
+                    }
+                    paymentisMade = true;
+                    return PaymentState::PAYMENT_SUCCESS;
+                }
+            } else {
+                logger::write("[payment] Cannot poll POS status - missing POS ID or API key", "error");
+            }
+            
+            lastOnlineCheck = currentTime;
+        }
+    }
+    
     return PaymentState::MONITORING_PAYMENT;
 }
 
 void cleanupPaymentFlow() {
     logger::write("[payment] Cleaning up payment flow", "info");
+    
+    // Clear API PIN
+    extern std::string apiReturnedPin;
+    apiReturnedPin = "";
     
     // Clean up NFC if enabled
     if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
@@ -696,18 +695,145 @@ void cleanupPaymentFlow() {
         cap.setThresholds(3, 5); // Restore normal sensitivity
     }
     
-    // Clean up online monitor task
-    if (onlineMonitorTaskHandle != NULL) {
-        vTaskDelete(onlineMonitorTaskHandle);
-        onlineMonitorTaskHandle = NULL;
-    }
-    
     // Reset payment state
     paymentisMade = false;
     connectionLoss = false;
-    onlineMonitorActive = false;
+    paymentStartTime = 0; // Reset timeout
 }
 
 bool isPaymentFlowActive() {
-    return onlineMonitorActive || (onlineMonitorTaskHandle != NULL);
+    return paymentisMade || (config::getBool("nfcEnabled") && nfcTaskHandle != NULL);
 }
+
+// New functions for POS status API integration
+std::string extractPosIdFromCallbackUrl() {
+    std::string callbackUrl = config::getString("callbackUrl");
+    
+    // Find the last slash in the URL
+    size_t lastSlash = callbackUrl.find_last_of('/');
+    if (lastSlash != std::string::npos && lastSlash < callbackUrl.length() - 1) {
+        return callbackUrl.substr(lastSlash + 1);
+    }
+    
+    logger::write("[payment] Failed to extract POS ID from callback URL: " + callbackUrl, "error");
+    return "";
+}
+
+bool checkPosPaymentStatus(const std::string &posId, const std::string &apiKey, const std::string &expectedPin, std::string &returnedPin) {
+    // Check if Wi-Fi is connected
+    if (WiFi.status() != WL_CONNECTED) {
+        logger::write("[payment] Wi-Fi not connected for POS status check", "debug");
+        return false;
+    }
+    
+    // Check if posId is not empty
+    if (posId.empty()) {
+        logger::write("[payment] POS ID is empty", "error");
+        return false;
+    }
+    
+    // Check if apiKey is not empty
+    if (apiKey.empty()) {
+        logger::write("[payment] API key is empty", "error");
+        return false;
+    }
+    
+    // Try to take the wifi semaphore before accessing wifi
+    HTTPClient* http = nullptr;
+    if(xSemaphoreTake(wifiSemaphore, portMAX_DELAY) == pdTRUE) {
+        http = new HTTPClient();
+        
+        // Extract the domain from the config callback url
+        std::string callbackUrl = config::getString("callbackUrl");
+        size_t domainStart = callbackUrl.find("://") + 3;
+        size_t domainEnd = callbackUrl.find("/", domainStart);
+        std::string domain = callbackUrl.substr(domainStart, domainEnd - domainStart);
+        
+        // Create the status API URL
+        std::string url = "https://" + domain + "/lnpos/api/v1/status/" + posId;
+        logger::write("[payment] Calling POS status API: " + url, "info");
+        http->begin(url.c_str());
+        
+        http->addHeader("accept", "application/json");
+        http->addHeader("X-Api-Key", apiKey.c_str());
+        
+        int httpResponseCode = http->GET();
+        
+        logger::write("[payment] POS status API response code: " + std::to_string(httpResponseCode), "info");
+        
+        if (httpResponseCode == 200) {
+            std::string response = http->getString().c_str();
+            logger::write("[payment] POS status API response body: " + response, "info");
+            
+            // Parse the response
+            DynamicJsonDocument doc(1024);
+            DeserializationError error = deserializeJson(doc, response);
+            
+            if (error) {
+                logger::write("[payment] Failed to parse JSON from POS status response: " + std::string(error.c_str()), "error");
+                http->end();
+                xSemaphoreGive(wifiSemaphore);
+                delete http;
+                return false;
+            }
+            
+            // Get the payment status and PIN
+            std::string status = doc["status"].as<std::string>();
+            if (doc.containsKey("pin")) {
+                returnedPin = doc["pin"].as<std::string>();
+            }
+            
+            logger::write("[payment] Parsed status: '" + status + "', PIN: '" + returnedPin + "', Expected PIN: '" + expectedPin + "'", "info");
+            
+            http->end();
+            xSemaphoreGive(wifiSemaphore);
+            delete http;
+            
+            // Only consider payment successful if status is "paid" AND PIN matches
+            if (status == "paid") {
+                if (!returnedPin.empty() && returnedPin == expectedPin) {
+                    logger::write("[payment] Payment confirmed with matching PIN", "info");
+                    return true;
+                } else if (returnedPin.empty()) {
+                    logger::write("[payment] Payment confirmed but no PIN returned from API", "warning");
+                    return true;
+                } else {
+                    logger::write("[payment] Payment status is 'paid' but PIN doesn't match. Expected: " + expectedPin + ", Got: " + returnedPin, "debug");
+                    return false;
+                }
+            }
+            
+            return false;
+            
+        } else if (httpResponseCode == 404) {
+            // Handle 404 as "still processing"
+            logger::write("[payment] POS status: still processing (404)", "debug");
+            http->end();
+            xSemaphoreGive(wifiSemaphore);
+            delete http;
+            return false;
+            
+        } else if (httpResponseCode == 500) {
+            // Handle 500 as "service error"
+            logger::write("[payment] POS status: service error (500)", "error");
+            http->end();
+            xSemaphoreGive(wifiSemaphore);
+            delete http;
+            return false;
+            
+        } else {
+            // Handle other errors
+            logger::write("[payment] POS status API error: " + std::to_string(httpResponseCode), "error");
+            http->end();
+            xSemaphoreGive(wifiSemaphore);
+            delete http;
+            return false;
+        }
+    } else {
+        logger::write("[payment] Failed to take wifi semaphore for POS status check", "error");
+        delete http;
+        return false;
+    }
+}
+
+// pollPosStatusAPI function removed - using checkPosPaymentStatus directly

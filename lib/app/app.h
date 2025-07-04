@@ -32,6 +32,7 @@ extern bool offlineOnly;
 extern PaymentState currentPaymentState;
 extern std::string currentPaymentLNURL;
 extern std::string currentPaymentPin;
+extern std::string apiReturnedPin;  // PIN returned from API for verification
 extern bool isInPaymentFlow;
 
 void appendToKeyBuffer(const std::string &key);

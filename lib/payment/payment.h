@@ -46,3 +46,7 @@ PaymentState initializePaymentFlow(const double &amount, const std::string &pin,
 PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &pin);
 void cleanupPaymentFlow();
 bool isPaymentFlowActive();
+
+// New functions for POS status API integration
+std::string extractPosIdFromCallbackUrl();
+bool checkPosPaymentStatus(const std::string &posId, const std::string &apiKey, const std::string &expectedPin, std::string &returnedPin);
