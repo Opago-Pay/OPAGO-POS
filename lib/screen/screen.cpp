@@ -52,6 +52,12 @@ void screenTask(void* parameter) {
 	const unsigned long STATUS_UPDATE_INTERVAL = 2100;
 	bool lastOnlineStatus = onlineStatus;
 	
+	// Connection status display variables
+	static unsigned long lastConnectionStatusCheck = 0;
+	const unsigned long CONNECTION_STATUS_CHECK_INTERVAL = 100; // Check every 100ms for responsiveness
+	static bool lastWifiLostScreenState = false;
+	static bool lastPinSymbolState = false;  // Track PIN symbol state to avoid unnecessary refreshes
+	
 	// Initial screen sequence
 	screen_tft::renderJPEG("/home.jpg", 0, 0, 1);
 	currentScreen = "home";
@@ -59,9 +65,41 @@ void screenTask(void* parameter) {
 	screen_tft::showStatusSymbols(power::getBatteryPercent());
 	screen_tft::showEnterAmountScreen(0);
 	currentScreen = "enterAmount";
+	lastOnlineStatus = onlineStatus;
+	lastPinSymbolState = screen_tft::shouldShowPinSymbol();  // Initialize PIN symbol state
 	
 	while (true) {
 		bool processedMessage = false;
+		unsigned long currentTime = millis();
+		
+		// Check connection status regularly when showing payment QR code
+		if (currentScreen == "paymentQRCode" && 
+			currentTime - lastConnectionStatusCheck >= CONNECTION_STATUS_CHECK_INTERVAL) {
+			
+			// Update connection status timing
+			screen_tft::updateConnectionStatus();
+			
+			// Check if WiFi lost screen state has changed
+			bool currentWifiLostScreenState = screen_tft::shouldShowWifiLostScreen();
+			bool currentPinSymbolState = screen_tft::shouldShowPinSymbol();
+			
+			// Refresh screen only if there's an actual state change
+			if (currentWifiLostScreenState != lastWifiLostScreenState) {
+				// WiFi lost screen state changed, refresh the screen
+				screen_tft::showPaymentQRCodeScreen(lastQRCode);
+				lastWifiLostScreenState = currentWifiLostScreenState;
+				logger::write("[screen] WiFi lost screen state changed: " + 
+				              std::string(currentWifiLostScreenState ? "showing" : "hiding"), "info");
+			} else if (currentPinSymbolState != lastPinSymbolState) {
+				// PIN symbol state changed, refresh the screen
+				screen_tft::showPaymentQRCodeScreen(lastQRCode);
+				lastPinSymbolState = currentPinSymbolState;
+				logger::write("[screen] PIN symbol state changed: " + 
+				              std::string(currentPinSymbolState ? "showing" : "hiding"), "info");
+			}
+			
+			lastConnectionStatusCheck = currentTime;
+		}
 		
 		// First, process any non-status screen updates
 		if (uxQueueMessagesWaiting(screenQueue) > 0) {
@@ -136,6 +174,10 @@ void screenTask(void* parameter) {
 								currentScreen = "paymentQRCode";
 								lastScreen = currentScreen;
 								lastQRCode = msg.text;
+								// Reset connection timers when starting to show payment QR
+								screen_tft::resetConnectionTimers();
+								lastWifiLostScreenState = false;
+								lastPinSymbolState = screen_tft::shouldShowPinSymbol();  // Initialize PIN symbol state
 								break;
 								
 							case ScreenMessage::MessageType::NFC_FAILED:
@@ -235,7 +277,6 @@ void screenTask(void* parameter) {
 			}
 			
 			// Regular timed status updates
-			unsigned long currentTime = millis();
 			if (currentTime - lastStatusUpdate >= STATUS_UPDATE_INTERVAL) {
 				screen_tft::showStatusSymbols(power::getBatteryPercent());
 				lastStatusUpdate = currentTime;
@@ -245,6 +286,12 @@ void screenTask(void* parameter) {
 			if (lastOnlineStatus != onlineStatus) {
 				screen_tft::showStatusSymbols(power::getBatteryPercent());
 				lastOnlineStatus = onlineStatus;
+				
+				// If we're showing payment QR code and connection status changed, refresh the screen
+				if (currentScreen == "paymentQRCode") {
+					screen_tft::showPaymentQRCodeScreen(lastQRCode);
+					logger::write("[screen] Connection status changed, refreshing payment QR screen", "info");
+				}
 			}
 		}
 		

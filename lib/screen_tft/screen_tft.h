@@ -79,6 +79,12 @@ namespace screen_tft {
 	void wakeup();
 	void showContrastInputScreen(const std::string &contrastInput);
 	void showSensitivityInputScreen(const std::string &sensitivityInput);
+	
+	// Connection status functions
+	void updateConnectionStatus();
+	bool shouldShowWifiLostScreen();
+	bool shouldShowPinSymbol();
+	void resetConnectionTimers();
 }
 
 #endif

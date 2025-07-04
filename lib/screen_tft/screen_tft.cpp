@@ -10,6 +10,16 @@ namespace {
 	int16_t center_y;
 	std::string currentPaymentQRCodeData;
 	bool backlightOff = false;
+	
+	// Connection status timing variables
+	unsigned long connectionLossStartTime = 0;
+	unsigned long lastWifiLostScreenTime = 0;
+	bool isShowingWifiLostScreen = false;
+	bool lastOnlineStatus = true;
+	const unsigned long CONNECTION_LOSS_THRESHOLD = 2100;  // 2.1 seconds
+	const unsigned long WIFI_LOST_SCREEN_THRESHOLD = 10000;  // 10 seconds
+	const unsigned long WIFI_LOST_SCREEN_DURATION = 2100;   // 2.1 seconds
+	const unsigned long WIFI_LOST_SCREEN_INTERVAL = 7900;   // 7.9 seconds
 
 	typedef std::vector<GFXfont> FontList;
 
@@ -310,6 +320,15 @@ namespace screen_tft {
 	}
 
 	void showPaymentQRCodeScreen(const std::string &qrcodeData) {
+		// Update connection status timing
+		updateConnectionStatus();
+		
+		// Check if we should show WiFi lost screen instead of QR code
+		if (shouldShowWifiLostScreen()) {
+			renderJPEG("/nowifi.jpg", 0, 0, 1);
+			return;
+		}
+		
 		clearScreen(false);
 		showStatusSymbols(power::getBatteryPercent()); 
 
@@ -355,8 +374,10 @@ namespace screen_tft {
 			              util::doubleToStringWithPrecision(amount, config::getUnsignedShort("fiatPrecision")) + 
 			              " " + currency + ", LNURL: " + qrcodeData, "info");
 			
-			// Show PIN icon at bottom right corner
-			renderText("\uE06A", MaterialIcons_Regular_24pt_chare06a24pt8b, TFT_WHITE, screenWidth - 5, tft.height() - 2, BR_DATUM);
+			// Show PIN icon at bottom right corner only if connection allows it
+			if (shouldShowPinSymbol()) {
+				renderText("\uE06A", MaterialIcons_Regular_24pt_chare06a24pt8b, TFT_WHITE, screenWidth - 5, tft.height() - 2, BR_DATUM);
+			}
 			
 			// Show NFC status icon at bottom left if enabled
 			if (config::getBool("nfcEnabled")) {
@@ -520,5 +541,110 @@ namespace screen_tft {
 		
 		const GFXfont inputFont = getBestFitFont(displayInput, monospaceFonts);
 		renderText(displayInput, inputFont, textColor, center_x, center_y - 2, TC_DATUM);
+	}
+
+	void updateConnectionStatus() {
+		unsigned long currentTime = millis();
+		
+		// Check if connection status has changed
+		if (lastOnlineStatus != onlineStatus) {
+			logger::write("[screen] Connection status change: " + 
+			              std::string(lastOnlineStatus ? "online" : "offline") + " -> " +
+			              std::string(onlineStatus ? "online" : "offline"), "info");
+			              
+			if (!onlineStatus) {
+				// Connection just lost
+				connectionLossStartTime = currentTime;
+				logger::write("[screen] Connection lost, starting timer", "info");
+			} else {
+				// Connection just restored
+				connectionLossStartTime = 0;
+				lastWifiLostScreenTime = 0;
+				isShowingWifiLostScreen = false;
+				logger::write("[screen] Connection restored", "info");
+			}
+			lastOnlineStatus = onlineStatus;
+		}
+		
+		// Handle WiFi lost screen timing when connection is lost
+		if (!onlineStatus && connectionLossStartTime > 0) {
+			unsigned long connectionLossDuration = currentTime - connectionLossStartTime;
+			
+			if (connectionLossDuration >= WIFI_LOST_SCREEN_THRESHOLD) {
+				// We've been disconnected for more than 10 seconds
+				if (!isShowingWifiLostScreen) {
+					// Check if it's time to show WiFi lost screen
+					if (lastWifiLostScreenTime == 0 || 
+						(currentTime - lastWifiLostScreenTime) >= WIFI_LOST_SCREEN_INTERVAL) {
+						isShowingWifiLostScreen = true;
+						lastWifiLostScreenTime = currentTime;
+						logger::write("[screen] Showing WiFi lost screen - offline for " + 
+						              std::to_string(connectionLossDuration) + "ms", "info");
+					}
+				} else {
+					// Check if it's time to hide WiFi lost screen
+					if ((currentTime - lastWifiLostScreenTime) >= WIFI_LOST_SCREEN_DURATION) {
+						isShowingWifiLostScreen = false;
+						logger::write("[screen] Hiding WiFi lost screen", "info");
+					}
+				}
+			}
+		}
+	}
+
+	bool shouldShowPinSymbol() {
+		// Show PIN symbol if:
+		// 1. We're in offline mode, OR
+		// 2. We're offline and have been for more than 2.1 seconds
+		
+		// Check if we're in offline mode
+		if (offlineMode) {
+			return true;
+		}
+		
+		// Check if we're offline and have been for the threshold time
+		if (!onlineStatus) {
+			if (connectionLossStartTime > 0) {
+				unsigned long connectionLossDuration = millis() - connectionLossStartTime;
+				bool shouldShow = connectionLossDuration >= CONNECTION_LOSS_THRESHOLD;
+				if (shouldShow) {
+					logger::write("[screen] Showing PIN symbol - offline for " + 
+					              std::to_string(connectionLossDuration) + "ms", "debug");
+				}
+				return shouldShow;
+			} else {
+				// Fallback: if we're offline but no timer set, assume we should show PIN
+				logger::write("[screen] Offline but no timer set, showing PIN symbol", "debug");
+				return true;
+			}
+		}
+		
+		return false;  // Don't show when online
+	}
+
+	bool shouldShowWifiLostScreen() {
+		// Only show WiFi lost screen if we've been offline for more than 10 seconds
+		// and we're currently in the "showing WiFi lost screen" state
+		if (!onlineStatus && connectionLossStartTime > 0) {
+			unsigned long connectionLossDuration = millis() - connectionLossStartTime;
+			return connectionLossDuration >= WIFI_LOST_SCREEN_THRESHOLD && isShowingWifiLostScreen;
+		}
+		return false;
+	}
+
+	void resetConnectionTimers() {
+		unsigned long currentTime = millis();
+		lastWifiLostScreenTime = 0;
+		isShowingWifiLostScreen = false;
+		lastOnlineStatus = onlineStatus;
+		
+		// If we're starting offline, set the connection loss start time to now
+		// so the PIN symbol will appear after the threshold
+		if (!onlineStatus) {
+			connectionLossStartTime = currentTime;
+			logger::write("[screen] Starting offline, setting connection loss timer", "info");
+		} else {
+			connectionLossStartTime = 0;
+		}
 	}
 }
