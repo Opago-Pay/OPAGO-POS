@@ -61,6 +61,8 @@ Adafruit_MPR121 cap = Adafruit_MPR121();
 
 //NFC variables
 String lnurlwNFC = "";
+std::string hybridBolt11Invoice = ""; // Store bolt11 invoice for hybrid payments
+bool hybridInvoiceFetched = false; // Track if we've already fetched the invoice for this payment
 bool initFlagNFC = false;
 
 //PAYMENT variables
@@ -90,8 +92,10 @@ void initBoot() {
         //init WiFi
         logger::write("Initializing WiFi ...");
         WiFi.onEvent(WiFiEventHandler);
-        if (xTaskCreate(WiFiTask, "WiFiTask", 4096, NULL, 21, NULL) != pdPASS) {
-            Serial.println("Failed to create wifi task");
+        if (xTaskCreatePinnedToCore(WiFiTask, "WiFiTask", 4096, NULL, 21, NULL, 0) != pdPASS) {
+            logger::write("[main] ERROR: Failed to create WiFi task", "error");
+        } else {
+            logger::write("[main] WiFi task created successfully on Core 0", "info");
         }
     } else {
         logger::write("Offline mode enabled, skipping WiFi initialization");
@@ -143,19 +147,27 @@ void setup() {
     
     // Only create NFC task if enabled in config
     if (config::getBool("nfcEnabled")) {
+        logger::write("[main] NFC enabled in config, creating NFC task", "info");
         if (nfcEventGroup == NULL) {
-            Serial.println("Failed to create NFC event group");
+            logger::write("[main] ERROR: Failed to create NFC event group", "error");
         } else {
+            logger::write("[main] NFC event group created successfully", "info");
             xEventGroupClearBits(nfcEventGroup, (1 << 0) | (1 << 1));
             xEventGroupSetBits(nfcEventGroup, (1 << 2));
-            if(xTaskCreate(nfcTask, "NFC Task", 8000, NULL, 2, &nfcTaskHandle) != pdPASS) {
-                Serial.println("Failed to create NFC task");
+            if(xTaskCreatePinnedToCore(nfcTask, "NFC Task", 8000, NULL, 2, &nfcTaskHandle, 0) != pdPASS) {
+                logger::write("[main] ERROR: Failed to create NFC task", "error");
+            } else {
+                logger::write("[main] NFC task created successfully on Core 0", "info");
             }
         }
+    } else {
+        logger::write("[main] NFC disabled in config, skipping NFC task creation", "info");
     }
     
-    if(xTaskCreate(appTask, "App Task", 8000, NULL, 2, &appTaskHandle) != pdPASS) {
-        Serial.println("Failed to create App task");
+    if(xTaskCreatePinnedToCore(appTask, "App Task", 8000, NULL, 2, &appTaskHandle, 1) != pdPASS) {
+        logger::write("[main] ERROR: Failed to create App task", "error");
+    } else {
+        logger::write("[main] App task created successfully on Core 1", "info");
     }
     vTaskSuspend(appTaskHandle); // Create the task in suspended state
 

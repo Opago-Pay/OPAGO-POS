@@ -27,6 +27,8 @@ extern EventGroupHandle_t nfcEventGroup;
 extern EventGroupHandle_t appEventGroup;
 
 extern String lnurlwNFC;
+extern std::string hybridBolt11Invoice; // Store bolt11 invoice for hybrid payments
+extern bool hybridInvoiceFetched; // Track if we've already fetched the invoice for this payment
 extern bool initFlagNFC;
 
 extern std::string qrcodeData;
@@ -34,6 +36,7 @@ extern bool paymentisMade;
 
 bool initNFC(PN532_I2C** pn532_i2c, Adafruit_PN532** nfc, PN532** pn532, NfcAdapter** nfcAdapter);
 void printTaskState(TaskHandle_t taskHandle);
+void recoverI2CBus();
 void setRFoff(bool turnOff, PN532_I2C* pn532_i2c);
 bool setRFPower(PN532_I2C* pn532_i2c, int power, int gain = 0x40, int modulation = 0x03, int miller = 0x0E);
 void nfcTask(void *args);
@@ -44,5 +47,8 @@ bool isLnurlw(String url);
 void idleMode(PN532_I2C *pn532_i2c);
 bool sendQRCodeToPhone(PN532_I2C* pn532_i2c, const String& qrcodeData);
 bool readAndProcessNFCData(PN532_I2C *pn532_i2c, PN532 *pn532, Adafruit_PN532 *nfc, NfcAdapter *nfcAdapter, int &readAttempts);
+
+// Function to request bolt11 invoice from LNURL-pay (from payment.cpp)
+std::string requestInvoice(const std::string &url);
 
 #endif

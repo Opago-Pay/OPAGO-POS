@@ -12,5 +12,7 @@ void cap_touch_init();
 void updateSensitivity(int sensitivityPercent);
 std::string getTouch();
 bool getLongTouch(char targetButton, unsigned long longTouchTime);
+bool getDebouncedLongTouch(char targetButton, unsigned long longTouchTime);
+void suppressTouchDuringNFC(bool suppress);
 
 #endif // CAP_TOUCH_H

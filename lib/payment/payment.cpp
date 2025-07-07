@@ -247,10 +247,28 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
 
     // Only configure NFC if it's enabled
     if (config::getBool("nfcEnabled")) {
+        logger::write("[payment] NFC is enabled, activating NFC task", "info");
+        
+        if (nfcTaskHandle == NULL) {
+            logger::write("[payment] ERROR: NFC task handle is NULL!", "error");
+        } else {
+            logger::write("[payment] NFC task handle is valid", "info");
+        }
+        
         cap.setThresholds(5, 5);
-        vTaskResume(nfcTaskHandle);
-        xEventGroupClearBits(nfcEventGroup, (1 << 1));
-        xEventGroupSetBits(nfcEventGroup, (1 << 0));
+        logger::write("[payment] Activating NFC task for payment mode", "info");
+        logger::write("[payment] Clearing NFC shutdown bit and setting activation bit", "info");
+        
+        if (nfcEventGroup == NULL) {
+            logger::write("[payment] ERROR: NFC event group is NULL!", "error");
+        } else {
+            logger::write("[payment] NFC event group is valid", "info");
+            xEventGroupClearBits(nfcEventGroup, (1 << 1));
+            xEventGroupSetBits(nfcEventGroup, (1 << 0));
+            logger::write("[payment] NFC task activation signals sent", "info");
+        }
+    } else {
+        logger::write("[payment] NFC is disabled in config", "info");
     }
 
     while (!paymentisMade) {
@@ -270,17 +288,28 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
             paymentisMade = isPaymentMade(paymentHash, apiKey);
         }
 
-        // Handle cancellation
+        // Handle cancellation - parallel with NFC
         if (config::getBool("nfcEnabled")) {
-            uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(210));
+            // Check for NFC payment completion (non-blocking)
+            uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(0));
             
             if ((uxBits & (1 << 0)) != 0) {
-                logger::write("[payment] Card detected, checking payment", "info");
-                vTaskDelay(pdMS_TO_TICKS(2100));
-                continue;
+                logger::write("[payment] NFC payment detected, checking if payment completed", "info");
+                // Clear the detection bit immediately
+                xEventGroupClearBits(appEventGroup, (1 << 0));
+                
+                // Give NFC task time to process before checking payment status
+                vTaskDelay(pdMS_TO_TICKS(2000)); // 2 seconds for processing
+                
+                // Check if payment was made via NFC
+                if (paymentisMade) {
+                    logger::write("[payment] Payment completed via NFC", "info");
+                    break; // Exit the payment waiting loop
+                }
             }
             
-            keyPressed = getLongTouch('*', 210);
+            // Use debounced touch detection to avoid false triggers from NFC interference
+            keyPressed = getDebouncedLongTouch('*', 210);
         } else {
             keyPressed = (getTouch() == "*");
         }
@@ -311,8 +340,8 @@ bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &a
             screen::adjustContrast(10);
         }
 
-        // Yield to prevent watchdog timer from triggering
-        vTaskDelay(pdMS_TO_TICKS(10)); // Small delay to ensure proper yielding
+        // Yield to prevent watchdog timer and allow NFC task on Core 0 to run
+        vTaskDelay(pdMS_TO_TICKS(50)); // Longer delay to ensure proper core switching
     }
 
     // Payment successful
@@ -412,7 +441,10 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
             
             if ((uxBits & (1 << 0)) != 0) {
                 logger::write("[payment] Card detected, checking payment", "info");
-                vTaskDelay(pdMS_TO_TICKS(2100));
+                // Clear the card detection bit immediately to prevent flooding
+                xEventGroupClearBits(appEventGroup, (1 << 0));
+                // Give NFC task time to process the card (longer delay)
+                vTaskDelay(pdMS_TO_TICKS(5000)); // 5 seconds for card processing
                 continue;
             }
             
@@ -478,8 +510,8 @@ bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &p
             screen::adjustContrast(10);
         }
 
-        // Yield to prevent watchdog timer from triggering
-        vTaskDelay(pdMS_TO_TICKS(10)); // Small delay to ensure proper yielding
+        // Yield to prevent watchdog timer and allow NFC task on Core 0 to run
+        vTaskDelay(pdMS_TO_TICKS(50)); // Longer delay to ensure proper core switching
     }
 
     // Payment successful
@@ -632,7 +664,9 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
         EventBits_t uxBits = xEventGroupWaitBits(appEventGroup, (1 << 0), pdFALSE, pdFALSE, 0);
         if ((uxBits & (1 << 0)) != 0) {
             logger::write("[payment] Card detected, checking payment", "info");
-            vTaskDelay(pdMS_TO_TICKS(100)); // Brief delay for card processing
+            // Clear the detection bit immediately to prevent repeated triggers
+            xEventGroupClearBits(appEventGroup, (1 << 0));
+            vTaskDelay(pdMS_TO_TICKS(3000)); // Longer delay for card processing
             return PaymentState::MONITORING_PAYMENT;
         }
     }
