@@ -391,11 +391,7 @@ bool sendQRCodeToPhone(PN532_I2C* pn532_i2c, const String& qrcodeData) {
 
 bool readAndProcessNFCData(PN532_I2C *pn532_i2c, PN532 *pn532, Adafruit_PN532 *nfc, NfcAdapter *nfcAdapter, int &readAttempts)
 {
-    NdefMessage message;
-    int recordCount;
-    uint8_t cardType = nfc->ntag424_isNTAG424();
-
-    // Always try to read as NTAG424 first
+    // Attempt NTAG424 operations on ALL cards (some NTAG424 cards hide their identity)
     uint8_t data[256];
     uint8_t bytesread = 0;
     
@@ -432,70 +428,9 @@ bool readAndProcessNFCData(PN532_I2C *pn532_i2c, PN532 *pn532, Adafruit_PN532 *n
             }
             return true;
         }
-    } else if (!cardType) {
-        // If card type is not NTAG424, try the alternate process
-        for (int i = 0; i < 3; i++) {
-            NfcTag tag = nfcAdapter->read();
-            String tagType = tag.getTagType();
-            Serial.println("[nfcTask] Tag type read");
-            Serial.println("Tag Type: " + tagType);
-            if (tag.hasNdefMessage()) {
-                message = tag.getNdefMessage();
-                recordCount = message.getRecordCount();
-            }
-            bool lnurlwFound = false;
-            for (int j = 0; j < recordCount && !lnurlwFound; j++) {
-                NdefRecord record = message.getRecord(j);
-                String recordType = record.getType();
-                String logMessage = "Record Type: " + recordType;
-                Serial.println(logMessage);
-                if (recordType == "U" || recordType == "T") { 
-                    uint8_t payload[record.getPayloadLength() + 1] = {0}; // Added +1 to the size and initialized to 0 to ensure null termination
-                    record.getPayload(payload);
-                    String recordPayload;
-                    if (recordType == "U") {
-                        switch (payload[0]) {
-                            case 0x01:
-                                recordPayload = "http://www.";
-                                break;
-                            case 0x02:
-                                recordPayload = "https://www.";
-                                break;
-                            case 0x03:
-                                recordPayload = "http://";
-                                break;
-                            case 0x04:
-                                recordPayload = "https://";
-                                break;
-                            default:
-                                recordPayload = String((char*)payload);
-                                break;
-                        }
-                        recordPayload += String((char*)&payload[1]);
-                    } else {
-                        for (int k = 0; k < record.getPayloadLength(); k++) {
-                            recordPayload += (char)payload[k];
-                        }
-                    }
-                    lnurlwNFC = recordPayload;
-                    String logMessage = "Record Payload: " + recordPayload;
-                    Serial.println(logMessage);
-                    if (isLnurlw()) {
-                        return true;
-                    }
-                }
-            }
-            readAttempts++;
-            if (readAttempts >= 6) {
-                setRFoff(true, pn532_i2c); // Switch off RF
-                if (isRfOff) {
-                    return false;
-                }
-            }
-        }
     }
-    
-    lnurlwNFC = ""; // Reset the global variable if it's not lnurlw
+
+    // NTAG424 read failed - not a valid boltcard
     return false;
 }
 
@@ -585,74 +520,50 @@ void nfcTask(void *args)
                 taskYIELD();
                 continue;
             }
-            logger::write("[nfcTask] RF is active, starting payment mode polling", "info");
-            logger::write("[nfcTask] *** CHECKPOINT 1: About to initialize readAttempts ***", "info");
+            logger::write("[nfcTask] Starting NFC polling for payment", "info");
             int readAttempts = 0;
-            logger::write("[nfcTask] *** CHECKPOINT 2: readAttempts initialized ***", "info");
-            
-            // Payment mode polling loop - only active during payment
-            logger::write("[nfcTask] *** CHECKPOINT 3: About to enter while loop ***", "info");
             
             // Suppress all touch input during NFC polling to prevent RF interference
             suppressTouchDuringNFC(true);
-            logger::write("[nfcTask] Touch input suppressed for entire NFC polling period", "info");
             
             while (1) 
             {
-                logger::write("[nfcTask] *** CHECKPOINT 4: Inside polling loop iteration ***", "info");
-                
                 // Check for shutdown signal only (non-blocking)
-                logger::write("[nfcTask] Checking for shutdown signal", "debug");
                 uxBits = xEventGroupWaitBits(nfcEventGroup, (1 << 1), pdFALSE, pdFALSE, 0);
-                logger::write(("[nfcTask] Event bits received: " + String(uxBits)).c_str(), "debug");
                 if ((uxBits & (1 << 1)) != 0) 
                 {
-                    logger::write("[nfcTask] *** SHUTDOWN SIGNAL RECEIVED - EXITING LOOP ***", "info");
+                    logger::write("[nfcTask] Shutdown signal received - exiting NFC polling", "info");
                     suppressTouchDuringNFC(false);
-                    logger::write("[nfcTask] Touch input re-enabled before shutdown", "info");
                     idleMode(pn532_i2c);
                     break;
                 }
-                logger::write("[nfcTask] No shutdown signal, continuing to poll", "debug");
 
-                // Wait for an ISO14443A type cards (Mifare, etc.). When one is found
-                // 'uid' will be populated with the UID, and uidLength will indicate
-                // if the uid is 4 bytes (Mifare Classic) or 7 bytes (Mifare Ultralight)
                 loopCounter++;
-                logger::write(("[nfcTask] *** POLLING ATTEMPT " + String(loopCounter) + " ***").c_str(), "info");
-                
-                // Simple card detection - no complex checks
-                logger::write("[nfcTask] About to call readPassiveTargetID", "info");
                 
                 // Direct polling with adaptive timeout - longer after RF cycling
-                unsigned long startTime = millis();
-                // Use longer timeout right after RF cycling (when loopCounter % 3 == 1), shorter for normal polls
                 uint16_t timeout = ((loopCounter % 3) == 1) ? 700 : 400; // Longer timeout right after RF cycle
                 success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, timeout);
-                unsigned long duration = millis() - startTime;
-                
-                logger::write(("[nfcTask] *** readPassiveTargetID COMPLETED in " + String(duration) + "ms, success=" + String(success) + " ***").c_str(), "info");
                 
                 // Cycle RF more frequently to wake up stationary NTAG424 cards
                 if (!success && (loopCounter % 3 == 0)) {
-                    logger::write("[nfcTask] No card detected after 3 attempts - cycling RF aggressively", "info");
+                    logger::write("[nfcTask] No card detected after 3 attempts - cycling RF and showing QR code", "info");
+                    
+                    // Show QR code instead of lingering NFC failed screen
+                    screen::showPaymentQRCodeScreen(qrcodeData);
                     
                     // More complete RF cycle - turn off for longer
                     setRFoff(true, pn532_i2c);
-                    logger::write(("[nfcTask] RF off, isRfOff=" + String(isRfOff)).c_str(), "debug");
                     vTaskDelay(pdMS_TO_TICKS(150)); // Longer RF off period for complete power cycle
                     
                     setRFoff(false, pn532_i2c);
-                    logger::write(("[nfcTask] RF on requested, isRfOff=" + String(isRfOff)).c_str(), "debug");
                     
                     // Verify RF is actually back on
                     if (isRfOff) {
-                        logger::write("[nfcTask] RF cycling failed - forcing RF on", "info");
                         setRFoff(false, pn532_i2c); // Force retry
                         vTaskDelay(pdMS_TO_TICKS(50));
                     }
                     
-                    vTaskDelay(pdMS_TO_TICKS(100)); // Longer stabilization time
+                    vTaskDelay(pdMS_TO_TICKS(100)); // Stabilization time
                     
                     // Complete RF reinitialization every 10th attempt for stubborn cards
                     if (loopCounter % 10 == 0) {
@@ -667,30 +578,15 @@ void nfcTask(void *args)
                         
                         vTaskDelay(pdMS_TO_TICKS(100)); // Extra stabilization after full reset
                     }
-                    
-                    logger::write("[nfcTask] RF cycling complete", "debug");
                 }
                 
-                // Even if Error 263 occurred internally, don't let it stop the polling loop
-                // The PN532 library might return 0 (false) due to I2C timeouts, but RF is still functional
-                
-                logger::write("[nfcTask] Checking if card was detected...", "info");
                 if (success) {
-                    // We seem to have a tag present
-                    logger::write(("[nfcTask] *** CARD DETECTED! UID Length: " + String(uidLength) + " bytes ***").c_str(), "info");
-                    String uidStr = "[nfcTask] UID Value: ";
-                    for (uint8_t i = 0; i < uidLength; i++) {
-                        if (uid[i] < 0x10) uidStr += "0";
-                        uidStr += String(uid[i], HEX);
-                        if (i < uidLength - 1) uidStr += " ";
-                    }
-                    logger::write(uidStr.c_str(), "info");
+                    // Card detected - show NFC screen and start reading
+                    logger::write("[nfcTask] Card detected - reading", "info");
                     screen::showNFC();
                     
                     // HYBRID PAYMENT: Fetch bolt11 invoice from LNURL-pay on first card detection
                     if (!hybridInvoiceFetched && (qrcodeData.find("LNURL") == 0 || qrcodeData.find("lightning:") == 0)) {
-                        logger::write("[nfcTask] Card detected - fetching bolt11 invoice from LNURL-pay for hybrid payment", "info");
-                        
                         // Extract the LNURL from the qrcodeData  
                         std::string lnurlPayUrl;
                         if (qrcodeData.find("lightning:") == 0) {
@@ -701,17 +597,15 @@ void nfcTask(void *args)
                         
                         // Decode the LNURL to get the actual URL  
                         std::string decodedUrl = Lnurl::decode(lnurlPayUrl);
-                        logger::write((std::string("[nfcTask] Decoded LNURL-pay URL: ") + decodedUrl).c_str(), "info");
                         
                         // Fetch the bolt11 invoice
                         hybridBolt11Invoice = requestInvoice(decodedUrl);
                         
                         if (!hybridBolt11Invoice.empty()) {
-                            logger::write("[nfcTask] Successfully fetched bolt11 invoice for hybrid payment", "info");
-                            logger::write((std::string("[nfcTask] Invoice: ") + hybridBolt11Invoice.substr(0, 50) + "...").c_str(), "debug");
+                            logger::write("[nfcTask] Fetched bolt11 invoice for hybrid payment", "info");
                             hybridInvoiceFetched = true;
                         } else {
-                            logger::write("[nfcTask] Failed to fetch bolt11 invoice - will use LNURL-pay directly", "info");
+                            logger::write("[nfcTask] Failed to fetch bolt11 invoice - using LNURL-pay directly", "info");
                         }
                     }
                     
@@ -770,28 +664,28 @@ void nfcTask(void *args)
                         logger::write("[nfcTask] NFC card reading exited with failure", "debug");
                         screen::showNFCfailed();
                         lnurlwNFC = "";
-                        vTaskDelay(pdMS_TO_TICKS(1200));
+                        // No delay needed - continue polling immediately for faster re-detection
                         xEventGroupClearBits(appEventGroup, (1<<0)); // NFC task is not actively processing
                     }
                     
                     // Brief delay after processing card before next poll
-                    vTaskDelay(pdMS_TO_TICKS(200));
+                    vTaskDelay(pdMS_TO_TICKS(100)); // Reduced from 200ms to 100ms for faster polling
                     // Continue polling for more cards instead of breaking
                 }
                 else 
                 {
-                    // No card detected - just continue polling
-                    logger::write(("[nfcTask] *** NO CARD DETECTED (attempt " + String(loopCounter) + ") ***").c_str(), "info");
+                    // No card detected - continue polling (only log every 3rd attempt)
+                    if (loopCounter % 3 == 0) {
+                        logger::write("[nfcTask] No card detected", "info");
+                    }
                     
                     // Balanced delay for I2C recovery and responsiveness 
                     vTaskDelay(pdMS_TO_TICKS(150)); // Balanced timing
-                    logger::write("[nfcTask] *** END OF LOOP ITERATION - CONTINUING ***", "info");
                 }
             }
             
             // Safety: Re-enable touch if we somehow exit the polling loop
             suppressTouchDuringNFC(false);
-            logger::write("[nfcTask] Touch input re-enabled (safety fallback)", "info");
         } else {
             // Not in payment mode - ensure RF is OFF to prevent keyboard disruption
             logger::write("[nfcTask] Not in payment mode - ensuring RF is OFF", "debug");

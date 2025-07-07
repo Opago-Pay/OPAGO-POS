@@ -164,6 +164,44 @@ void appTask(void* pvParameters) {
                 }
                 vTaskDelay(pdMS_TO_TICKS(50));
             }
+            
+            // CRITICAL: Ensure RF is turned off before returning to amount entry
+            logger::write("[app] Payment success - ensuring RF is turned off before returning to amount entry", "info");
+            if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
+                logger::write("[app] Initiating RF shutdown sequence - trying for 10 seconds", "info");
+                
+                bool rfShutdownSuccess = false;
+                unsigned long shutdownStartTime = millis();
+                const unsigned long SHUTDOWN_TIMEOUT_MS = 10000; // 10 seconds
+                
+                while (!rfShutdownSuccess && (millis() - shutdownStartTime) < SHUTDOWN_TIMEOUT_MS) {
+                    // Send shutdown signals
+                    xEventGroupClearBits(nfcEventGroup, (1 << 0));
+                    xEventGroupSetBits(nfcEventGroup, (1 << 1));
+                    
+                    // Wait for confirmation with shorter timeout for retry
+                    EventBits_t uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
+                    if ((uxBits & (1 << 1)) != 0) {
+                        logger::write("[app] RF shutdown confirmed", "info");
+                        vTaskSuspend(nfcTaskHandle);
+                        rfShutdownSuccess = true;
+                    } else {
+                        logger::write("[app] RF shutdown attempt failed, retrying...", "warning");
+                        vTaskDelay(pdMS_TO_TICKS(100)); // Brief delay before retry
+                    }
+                }
+                
+                if (!rfShutdownSuccess) {
+                    logger::write("[app] CRITICAL: RF shutdown failed after 10 seconds - REBOOTING DEVICE", "error");
+                    screen::showX(); // Show error briefly
+                    vTaskDelay(pdMS_TO_TICKS(2000)); // Show error for 2 seconds
+                    esp_restart(); // Force reboot to ensure clean state
+                    return; // This won't execute but for safety
+                }
+                
+                logger::write("[app] RF confirmed off - safe to return to amount entry", "info");
+            }
+            
             keysBuffer = "";  // Reset buffer
             amount = 0;       // Reset amount
             screen::showEnterAmountScreen(0);
