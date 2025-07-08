@@ -72,6 +72,7 @@ uint16_t amountCentsDivisor = 1;
 unsigned short maxNumKeysPressed = 12;
 std::string qrcodeData = "";
 bool paymentisMade = false;
+uint32_t currentPaymentSessionId = 0; // Track payment session to prevent stale results
 
 void initBoot() {
     //init the serial port

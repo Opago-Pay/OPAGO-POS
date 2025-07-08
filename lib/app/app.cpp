@@ -254,6 +254,11 @@ void appTask(void* pvParameters) {
             } else if (keyPressed == "#") {
                 amount = keysToAmount(keysBuffer);
                 if (amount > 0) {
+                    // CRITICAL: Explicitly reset payment state before starting new payment
+                    extern bool paymentisMade;
+                    paymentisMade = false;
+                    logger::write("[app] Explicitly reset paymentisMade to false before new payment", "info");
+                    
                     // Initialize payment flow
                     qrcodeData = "";
                     pin = util::generateRandomPin();

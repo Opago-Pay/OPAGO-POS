@@ -581,7 +581,14 @@ PaymentState initializePaymentFlow(const double &amount, const std::string &pin,
     
     // CRITICAL: Reset payment state for new payment session
     paymentisMade = false;
-    logger::write("[payment] Reset paymentisMade to false for new payment session", "info");
+    logger::write("[payment] Reset paymentisMade=false in initializePaymentFlow for new payment session", "info");
+    
+    // Generate new payment session ID to prevent stale results from previous sessions
+    static uint32_t paymentSessionId = 0;
+    paymentSessionId++;
+    extern uint32_t currentPaymentSessionId;
+    currentPaymentSessionId = paymentSessionId;
+    logger::write("[payment] Started new payment session ID: " + std::to_string(paymentSessionId), "info");
     
     // Clear any lingering event bits from previous payment sessions
     xEventGroupClearBits(appEventGroup, LNURL_WITHDRAW_REQUEST_BIT | LNURL_WITHDRAW_SUCCESS_BIT | LNURL_WITHDRAW_FAILED_BIT);
@@ -641,6 +648,9 @@ PaymentState initializePaymentFlow(const double &amount, const std::string &pin,
 }
 
 PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &pin) {
+    // DEBUGGING: Log current payment state at start of check
+    logger::write("[payment] checkPaymentStatus called - paymentisMade: " + std::string(paymentisMade ? "true" : "false"), "debug");
+    
     // Check connection state
     static bool lastConnectionState = onlineStatus;
     if (lastConnectionState != onlineStatus) {
@@ -652,6 +662,7 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
     
     // Check if payment was already made
     if (paymentisMade) {
+        logger::write("[payment] IMMEDIATE SUCCESS: paymentisMade is already true - this may be the bug!", "warning");
         return PaymentState::PAYMENT_SUCCESS;
     }
     
@@ -743,6 +754,7 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
                     // Wait longer to ensure NFC task receives the success signal
                     vTaskDelay(pdMS_TO_TICKS(200)); 
                     paymentisMade = true;
+                    logger::write("[payment] Setting paymentisMade=true due to LNURL withdrawal success", "info");
                     return PaymentState::PAYMENT_SUCCESS;
                 } else {
                     logger::write("[payment] LNURL-withdraw failed", "info");
@@ -803,6 +815,7 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
                         apiReturnedPin = returnedPin;
                     }
                     paymentisMade = true;
+                    logger::write("[payment] Setting paymentisMade=true due to POS status API confirmation", "info");
                     return PaymentState::PAYMENT_SUCCESS;
                 }
             } else {
@@ -837,6 +850,7 @@ void cleanupPaymentFlow() {
     
     // Reset payment state
     paymentisMade = false;
+    logger::write("[payment] Reset paymentisMade=false in cleanupPaymentFlow", "info");
     connectionLoss = false;
     paymentStartTime = 0; // Reset timeout
 }

@@ -124,10 +124,10 @@ int startAutoPollingForNTAG424(PN532* pn532, Adafruit_PN532* nfc) {
     // Configure target types for ISO14443A (NTAG424 compatible)
     uint8_t targetTypes[] = {PN532_MIFARE_ISO14443A}; // Type A targets (includes NTAG424)
     
-    // Start InAutoPoll with enhanced settings for better static card detection
+    // Start InAutoPoll with original proven settings for optimal performance
     // pollNr=1: Check for 1 target max to minimize processing
-    // period=6: Poll every 900ms (6 * 150ms) for longer RF sweeps and better static card detection
-    bool autoResult = pn532->inAutoPoll(1, 6, targetTypes, sizeof(targetTypes), 2000);
+    // period=2: Poll every 300ms (2 * 150ms) for optimal balance of speed and detection
+    bool autoResult = pn532->inAutoPoll(1, 2, targetTypes, sizeof(targetTypes), 1500);
     
     if (autoResult) {
         logger::write("[nfcTask] InAutoPoll detected target - attempting direct NTAG424 read", "info");
@@ -675,6 +675,12 @@ void nfcTask(void *args)
                             cardDetectedLnurlw = std::string(lnurlwNFC.c_str()); // Store the LNURL withdraw data
                             logger::write("[nfcTask] LNURL withdraw data stored for payment task: " + cardDetectedLnurlw, "info");
                             
+                            // Store current payment session ID to prevent stale results from affecting future sessions
+                            extern uint32_t currentPaymentSessionId;
+                            static uint32_t nfcProcessingSessionId = 0;
+                            nfcProcessingSessionId = currentPaymentSessionId;
+                            logger::write("[nfcTask] Processing withdrawal for session ID: " + std::to_string(nfcProcessingSessionId), "info");
+                            
                             // Signal payment task to process LNURL withdrawal
                             xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_REQUEST_BIT);
                             
@@ -699,7 +705,17 @@ void nfcTask(void *args)
                                 logger::write("[nfcTask] Touch input re-enabled after successful withdraw", "info");
                                 isProcessingCard = false; // Reset processing flag
                                 idleMode(pn532_i2c); // Enter idle mode
-                                paymentisMade = true;
+                                
+                                // CRITICAL: Only set paymentisMade if we're still in the same payment session
+                                // This prevents delayed results from previous sessions affecting new payments
+                                if (nfcProcessingSessionId == currentPaymentSessionId) {
+                                    paymentisMade = true;
+                                    logger::write("[nfcTask] Setting paymentisMade=true for session " + std::to_string(nfcProcessingSessionId), "info");
+                                } else {
+                                    logger::write("[nfcTask] IGNORING withdrawal success - session mismatch. Processing: " + 
+                                                std::to_string(nfcProcessingSessionId) + ", Current: " + 
+                                                std::to_string(currentPaymentSessionId), "warning");
+                                }
                             } else if (withdrawResult & LNURL_WITHDRAW_FAILED_BIT) {
                                 logger::write("[nfcTask] LNURL withdrawal failed", "info");
                                 vTaskDelay(pdMS_TO_TICKS(2000)); // Brief delay to show sand screen
