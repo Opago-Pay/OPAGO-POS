@@ -63,6 +63,7 @@ Adafruit_MPR121 cap = Adafruit_MPR121();
 String lnurlwNFC = "";
 std::string hybridBolt11Invoice = ""; // Store bolt11 invoice for hybrid payments
 bool hybridInvoiceFetched = false; // Track if we've already fetched the invoice for this payment
+std::string cardDetectedLnurlw = ""; // LNURL withdraw data detected by NFC task for payment task to process
 bool initFlagNFC = false;
 
 //PAYMENT variables

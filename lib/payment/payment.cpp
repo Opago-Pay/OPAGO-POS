@@ -659,6 +659,86 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
         }
     }
     
+    // Check for LNURL withdrawal request from NFC task
+    EventBits_t lnurlRequest = xEventGroupWaitBits(appEventGroup, LNURL_WITHDRAW_REQUEST_BIT, pdFALSE, pdFALSE, 0);
+    if ((lnurlRequest & LNURL_WITHDRAW_REQUEST_BIT) != 0) {
+        logger::write("[payment] Processing LNURL withdrawal request from NFC task", "info");
+        xEventGroupClearBits(appEventGroup, LNURL_WITHDRAW_REQUEST_BIT); // Clear the request bit
+        
+        extern std::string cardDetectedLnurlw;
+        if (!cardDetectedLnurlw.empty()) {
+            logger::write("[payment] Processing LNURL-withdraw: " + cardDetectedLnurlw, "info");
+            
+            // Fetch bolt11 invoice - retry until successful or offline
+            extern bool hybridInvoiceFetched;
+            extern std::string hybridBolt11Invoice;
+            
+            if (!hybridInvoiceFetched) {
+                logger::write("[payment] Fetching bolt11 invoice for card payment", "info");
+                
+                // Extract and decode the LNURL from the QR code data (following working implementation)
+                std::string lnurlPayUrl;
+                if (lnurlQR.find("lightning:") == 0) {
+                    lnurlPayUrl = lnurlQR.substr(10); // Remove "lightning:" prefix
+                } else if (lnurlQR.find("LNURL") == 0) {
+                    lnurlPayUrl = lnurlQR; // Already just the LNURL
+                } else {
+                    // Extract LNURL from URI prefix
+                    std::string prefix = config::getString("uriSchemaPrefix");
+                    if (lnurlQR.length() > prefix.length()) {
+                        lnurlPayUrl = lnurlQR.substr(prefix.length());
+                    }
+                }
+                
+                // Decode the LNURL to get the actual URL (this was the missing step!)
+                std::string decodedUrl = Lnurl::decode(lnurlPayUrl);
+                logger::write(std::string("[payment] Decoded LNURL-pay URL: ") + decodedUrl, "info");
+                
+                // Keep retrying until we get a bolt11 invoice or go offline
+                int retryCount = 0;
+                const int maxRetries = 10;
+                while (!hybridInvoiceFetched && onlineStatus && retryCount < maxRetries) {
+                    retryCount++;
+                    logger::write(std::string("[payment] Bolt11 fetch attempt ") + std::to_string(retryCount), "info");
+                    
+                    // Use the decoded URL, not the bech32 LNURL!
+                    std::string bolt11Invoice = requestInvoice(decodedUrl);
+                    if (!bolt11Invoice.empty()) {
+                        hybridBolt11Invoice = bolt11Invoice;
+                        hybridInvoiceFetched = true;
+                        logger::write("[payment] Bolt11 invoice fetched successfully", "info");
+                        break;
+                    } else {
+                        logger::write("[payment] Bolt11 fetch failed, retrying...", "warning");
+                        vTaskDelay(pdMS_TO_TICKS(1000)); // Wait 1 second before retry
+                    }
+                }
+            }
+            
+            // Only proceed if we have a bolt11 invoice
+            if (hybridInvoiceFetched && !hybridBolt11Invoice.empty()) {
+                logger::write("[payment] Processing LNURL-withdraw with bolt11 invoice", "info");
+                bool withdrawSuccess = withdrawFromLnurlw(cardDetectedLnurlw.c_str(), hybridBolt11Invoice);
+                
+                if (withdrawSuccess) {
+                    logger::write("[payment] LNURL-withdraw successful", "info");
+                    xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_SUCCESS_BIT);
+                    paymentisMade = true;
+                    return PaymentState::PAYMENT_SUCCESS;
+                } else {
+                    logger::write("[payment] LNURL-withdraw failed", "info");
+                    xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_FAILED_BIT);
+                }
+            } else {
+                logger::write("[payment] Cannot process LNURL-withdraw - no bolt11 invoice available", "error");
+                xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_FAILED_BIT);
+            }
+        } else {
+            logger::write("[payment] LNURL withdrawal request received but no LNURL data available", "error");
+            xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_FAILED_BIT);
+        }
+    }
+    
     // Check for NFC card detection
     if (config::getBool("nfcEnabled")) {
         EventBits_t uxBits = xEventGroupWaitBits(appEventGroup, (1 << 0), pdFALSE, pdFALSE, 0);
@@ -666,6 +746,9 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
             logger::write("[payment] Card detected, checking payment", "info");
             // Clear the detection bit immediately to prevent repeated triggers
             xEventGroupClearBits(appEventGroup, (1 << 0));
+            
+            // Card detection is now just a signal - LNURL withdrawal is handled separately
+            // via the LNURL_WITHDRAW_REQUEST_BIT mechanism above
             vTaskDelay(pdMS_TO_TICKS(3000)); // Longer delay for card processing
             return PaymentState::MONITORING_PAYMENT;
         }

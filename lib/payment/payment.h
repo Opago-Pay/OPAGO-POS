@@ -6,6 +6,8 @@
 #include "config.h"
 #include "keypad.h"
 #include "nfc.h"
+#include "withdraw_lnurlw.h"
+#include "lnurl.h"
 
 // Payment flow states
 enum class PaymentState {

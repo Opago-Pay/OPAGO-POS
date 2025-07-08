@@ -33,12 +33,21 @@ extern bool initFlagNFC;
 
 extern std::string qrcodeData;
 extern bool paymentisMade;
+extern std::string cardDetectedLnurlw; // LNURL withdraw data detected by NFC task for payment task to process
+
+// Event bits for NFC-Payment task coordination
+#define NFC_CARD_DETECTED_BIT      (1 << 0)  // Card detected by NFC task
+#define NFC_RF_OFF_CONFIRMED_BIT   (1 << 1)  // RF shutdown confirmed
+#define LNURL_WITHDRAW_REQUEST_BIT (1 << 2)  // NFC task requests payment task to process LNURL withdraw
+#define LNURL_WITHDRAW_SUCCESS_BIT (1 << 3)  // Payment task signals successful LNURL withdraw
+#define LNURL_WITHDRAW_FAILED_BIT  (1 << 4)  // Payment task signals failed LNURL withdraw
 
 bool initNFC(PN532_I2C** pn532_i2c, Adafruit_PN532** nfc, PN532** pn532, NfcAdapter** nfcAdapter);
 void printTaskState(TaskHandle_t taskHandle);
 void recoverI2CBus();
 void setRFoff(bool turnOff, PN532_I2C* pn532_i2c);
 bool setRFPower(PN532_I2C* pn532_i2c, int power, int gain = 0x40, int modulation = 0x03, int miller = 0x0E);
+bool activateNTAG424DNA(PN532_I2C* pn532_i2c, Adafruit_PN532* nfc);
 void nfcTask(void *args);
 void scanDevices(TwoWire *w);
 void printRecordPayload(const uint8_t* payload, size_t len);

@@ -90,6 +90,32 @@ bool initNFC(PN532_I2C** pn532_i2c, Adafruit_PN532** nfc, PN532** pn532, NfcAdap
     } 
 }
 
+// NTAG424 DNA activation sequence for better detection of stationary cards
+bool activateNTAG424DNA(PN532_I2C* pn532_i2c, Adafruit_PN532* nfc) {
+    // Step 1: Ensure RF field is properly configured for NTAG424 DNA wake-up
+    setRFPower(pn532_i2c, 220, 0x58, 0x01, 0x01); // High power, high gain for wake-up
+    vTaskDelay(pdMS_TO_TICKS(50)); // Allow field to stabilize
+    
+    // Step 2: Try to wake up any sleeping NTAG424 DNA cards
+    // Send ISO14443-3 REQA (Request Type A) command to wake up cards
+    uint8_t wakeupCmd[] = {0x26}; // REQA command
+    uint8_t response[16];
+    int result = pn532_i2c->writeCommand(wakeupCmd, sizeof(wakeupCmd), response, sizeof(response));
+    
+    if (result == 0) {
+        logger::write("[nfcTask] NTAG424 wake-up command sent successfully", "debug");
+    }
+    
+    // Step 3: Brief delay for card to respond to wake-up
+    vTaskDelay(pdMS_TO_TICKS(20));
+    
+    // Step 4: Reset RF field with optimized power for reading
+    setRFPower(pn532_i2c, 190, 0x48, 0x02, 0x0E); // Standard power for reading
+    vTaskDelay(pdMS_TO_TICKS(30));
+    
+    return true;
+}
+
 void recoverI2CBus() {
     logger::write("[nfcTask] Attempting I2C bus recovery for Error 263 mitigation", "info");
     
@@ -540,34 +566,35 @@ void nfcTask(void *args)
 
                 loopCounter++;
                 
-                // Direct polling with adaptive timeout - longer after RF cycling
-                uint16_t timeout = ((loopCounter % 3) == 1) ? 700 : 400; // Longer timeout right after RF cycle
+                // NTAG424 DNA wake-up sequence before each read attempt
+                if (loopCounter % 2 == 1) { // Activate every other attempt to balance performance
+                    activateNTAG424DNA(pn532_i2c, nfc);
+                }
+                
+                // Aggressive polling with shorter timeouts for better responsiveness
+                uint16_t timeout = 300; // Shorter, consistent timeout for active polling
                 success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, timeout);
                 
-                // Cycle RF more frequently to wake up stationary NTAG424 cards
-                if (!success && (loopCounter % 3 == 0)) {
-                    logger::write("[nfcTask] No card detected after 3 attempts - cycling RF and showing QR code", "info");
+                // More frequent RF cycling specifically for NTAG424 DNA cards
+                if (!success && (loopCounter % 2 == 0)) {
+                    logger::write("[nfcTask] No card detected after 2 attempts - cycling RF for NTAG424 DNA", "debug");
                     
-                    // Show QR code instead of lingering NFC failed screen
+                    // Show QR code to maintain UI responsiveness
                     screen::showPaymentQRCodeScreen(qrcodeData);
                     
-                    // More complete RF cycle - turn off for longer
+                    // Enhanced RF cycle for NTAG424 DNA wake-up
                     setRFoff(true, pn532_i2c);
-                    vTaskDelay(pdMS_TO_TICKS(150)); // Longer RF off period for complete power cycle
+                    vTaskDelay(pdMS_TO_TICKS(100)); // Longer RF off period for complete power cycle
                     
                     setRFoff(false, pn532_i2c);
                     
-                    // Verify RF is actually back on
-                    if (isRfOff) {
-                        setRFoff(false, pn532_i2c); // Force retry
-                        vTaskDelay(pdMS_TO_TICKS(50));
-                    }
+                    // Force RF power configuration for NTAG424 DNA compatibility
+                    setRFPower(pn532_i2c, 210, 0x58, 0x01, 0x01); // High power wake-up configuration
+                    vTaskDelay(pdMS_TO_TICKS(80)); // Longer stabilization for NTAG424 DNA
                     
-                    vTaskDelay(pdMS_TO_TICKS(100)); // Stabilization time
-                    
-                    // Complete RF reinitialization every 10th attempt for stubborn cards
-                    if (loopCounter % 10 == 0) {
-                        logger::write("[nfcTask] Performing complete RF reinitialization", "info");
+                    // Complete RF reinitialization every 6th attempt for stubborn cards
+                    if (loopCounter % 6 == 0) {
+                        logger::write("[nfcTask] Performing complete RF reinitialization for NTAG424 DNA", "info");
                         
                         // Reinitialize SAM configuration for clean RF field
                         if (pn532->SAMConfig()) {
@@ -576,7 +603,10 @@ void nfcTask(void *args)
                             logger::write("[nfcTask] SAM reconfiguration failed", "info");
                         }
                         
+                        // Extra NTAG424 DNA specific configuration
+                        setRFPower(pn532_i2c, 230, 0x68, 0x01, 0x01); // Maximum power for stubborn cards
                         vTaskDelay(pdMS_TO_TICKS(100)); // Extra stabilization after full reset
+                        setRFPower(pn532_i2c, 190, 0x48, 0x02, 0x0E); // Back to normal reading power
                     }
                 }
                 
@@ -585,32 +615,8 @@ void nfcTask(void *args)
                     logger::write("[nfcTask] Card detected - reading", "info");
                     screen::showNFC();
                     
-                    // HYBRID PAYMENT: Fetch bolt11 invoice from LNURL-pay on first card detection
-                    if (!hybridInvoiceFetched && (qrcodeData.find("LNURL") == 0 || qrcodeData.find("lightning:") == 0)) {
-                        // Extract the LNURL from the qrcodeData  
-                        std::string lnurlPayUrl;
-                        if (qrcodeData.find("lightning:") == 0) {
-                            lnurlPayUrl = qrcodeData.substr(10); // Remove "lightning:" prefix
-                        } else {
-                            lnurlPayUrl = qrcodeData; // Already just the LNURL
-                        }
-                        
-                        // Decode the LNURL to get the actual URL  
-                        std::string decodedUrl = Lnurl::decode(lnurlPayUrl);
-                        
-                        // Fetch the bolt11 invoice
-                        hybridBolt11Invoice = requestInvoice(decodedUrl);
-                        
-                        if (!hybridBolt11Invoice.empty()) {
-                            logger::write("[nfcTask] Fetched bolt11 invoice for hybrid payment", "info");
-                            hybridInvoiceFetched = true;
-                        } else {
-                            logger::write("[nfcTask] Failed to fetch bolt11 invoice - using LNURL-pay directly", "info");
-                        }
-                    }
-                    
                     // Reading and processing the NFC data
-                    xEventGroupSetBits(appEventGroup, (1<<0)); // NFC task is actively processing
+                    xEventGroupSetBits(appEventGroup, (1<<0)); // Signal card detected to payment task
                     bool result = readAndProcessNFCData(pn532_i2c, pn532, nfc, nfcAdapter, readAttempts);
                     if (result) 
                     {
@@ -626,38 +632,56 @@ void nfcTask(void *args)
                             logger::write("[nfcTask] Using payment data: LNURL-pay", "info");
                         }
                         
-                        // Try to withdraw from lnurlw
-                        bool withdrawSuccess = withdrawFromLnurlw(lnurlwNFC, paymentData);
-                        if (withdrawSuccess)
-                        {
-                            logger::write("[nfcTask] Withdraw from lnurlw exited with success", "debug");
+                        // Pass the LNURL data to the payment task for SSL processing
+                        cardDetectedLnurlw = std::string(lnurlwNFC.c_str()); // Store the LNURL withdraw data
+                        logger::write("[nfcTask] LNURL withdraw data stored for payment task: " + cardDetectedLnurlw, "info");
+                        
+                        // Signal payment task to process LNURL withdrawal
+                        xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_REQUEST_BIT);
+                        
+                        // Show loading screen while payment task processes the withdrawal
+                        screen::showSand();
+                        logger::write("[nfcTask] Waiting for payment task to process LNURL withdrawal", "info");
+                        
+                        // Wait for payment task to complete the withdrawal (success or failure)
+                        EventBits_t withdrawResult = xEventGroupWaitBits(
+                            appEventGroup, 
+                            LNURL_WITHDRAW_SUCCESS_BIT | LNURL_WITHDRAW_FAILED_BIT,
+                            pdTRUE,  // Clear bits after waiting
+                            pdFALSE, // Wait for ANY of the bits (OR operation)
+                            pdMS_TO_TICKS(10000) // 10 second timeout
+                        );
+                        
+                        if (withdrawResult & LNURL_WITHDRAW_SUCCESS_BIT) {
+                            logger::write("[nfcTask] LNURL withdrawal successful", "info");
                             screen::showSuccess();
                             suppressTouchDuringNFC(false);
                             logger::write("[nfcTask] Touch input re-enabled after successful withdraw", "info");
                             idleMode(pn532_i2c); // Enter idle mode
-                        }
-                        else
-                        {
-                            logger::write("[nfcTask] Withdraw from lnurlw exited with failure", "debug");
-                            screen::showSand();
-                            vTaskDelay(pdMS_TO_TICKS(4200)); // Wait for 4.2 seconds
-                            if (!paymentisMade) 
-                            {
-                                logger::write("[nfcTask] Invoice not paid", "info");
+                            paymentisMade = true;
+                        } else if (withdrawResult & LNURL_WITHDRAW_FAILED_BIT) {
+                            logger::write("[nfcTask] LNURL withdrawal failed", "info");
+                            vTaskDelay(pdMS_TO_TICKS(2000)); // Brief delay to show sand screen
+                            if (!paymentisMade) {
+                                logger::write("[nfcTask] Payment not made via other means, showing failed screen", "info");
                                 screen::showX();
-                                xEventGroupClearBits(appEventGroup, (1<<0)); // NFC task is not actively processing
+                                vTaskDelay(pdMS_TO_TICKS(2000)); // Show X briefly
                                 screen::showPaymentQRCodeScreen(qrcodeData);
-                            }
-                            else 
-                            {
-                                logger::write("[nfcTask] Invoice paid", "info");
+                            } else {
+                                logger::write("[nfcTask] Payment made via other means, showing success", "info");
                                 screen::showSuccess();
                                 suppressTouchDuringNFC(false);
-                                logger::write("[nfcTask] Touch input re-enabled after invoice paid", "info");
-                                idleMode(pn532_i2c); // Enter idle mode
+                                idleMode(pn532_i2c);
                             }
+                        } else {
+                            logger::write("[nfcTask] LNURL withdrawal timeout - no response from payment task", "error");
+                            screen::showX();
+                            vTaskDelay(pdMS_TO_TICKS(2000));
+                            screen::showPaymentQRCodeScreen(qrcodeData);
                         }
+                        
                         lnurlwNFC = "";
+                        cardDetectedLnurlw = ""; // Clear the data after processing
                     } 
                     else 
                     {
@@ -665,7 +689,7 @@ void nfcTask(void *args)
                         screen::showNFCfailed();
                         lnurlwNFC = "";
                         // No delay needed - continue polling immediately for faster re-detection
-                        xEventGroupClearBits(appEventGroup, (1<<0)); // NFC task is not actively processing
+                        xEventGroupClearBits(appEventGroup, (1<<0)); // Clear card processing bit
                     }
                     
                     // Brief delay after processing card before next poll
@@ -674,13 +698,24 @@ void nfcTask(void *args)
                 }
                 else 
                 {
-                    // No card detected - continue polling (only log every 3rd attempt)
-                    if (loopCounter % 3 == 0) {
-                        logger::write("[nfcTask] No card detected", "info");
+                    // No card detected - continue polling with optimized timing for NTAG424 DNA
+                    if (loopCounter % 6 == 0) {
+                        logger::write("[nfcTask] No card detected after 6 attempts", "info");
                     }
                     
-                    // Balanced delay for I2C recovery and responsiveness 
-                    vTaskDelay(pdMS_TO_TICKS(150)); // Balanced timing
+                    // Optimized delay for NTAG424 DNA responsiveness
+                    uint32_t pollDelay;
+                    int cyclePosition = loopCounter % 6;
+                    
+                    if (cyclePosition <= 2) {
+                        pollDelay = 60;  // Very fast polling for immediate detection
+                    } else if (cyclePosition <= 4) {
+                        pollDelay = 80;  // Medium speed polling
+                    } else {
+                        pollDelay = 120; // Slightly longer for I2C recovery
+                    }
+                    
+                    vTaskDelay(pdMS_TO_TICKS(pollDelay));
                 }
             }
             
