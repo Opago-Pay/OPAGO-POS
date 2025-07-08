@@ -836,16 +836,45 @@ void cleanupPaymentFlow() {
     extern std::string apiReturnedPin;
     apiReturnedPin = "";
     
-    // Clean up NFC if enabled
+    // CRITICAL: Immediately restore full keyboard functionality
+    extern void setRFSafeMode(bool enable);
+    setRFSafeMode(false); // Disable RF-safe mode first
+    suppressTouchDuringNFC(false); // Ensure touch is not suppressed
+    logger::write("[payment] RF-safe mode disabled and touch restored in cleanup", "info");
+    
+    // Clean up NFC if enabled with robust shutdown sequence
     if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
+        logger::write("[payment] Starting NFC shutdown sequence", "info");
+        
         EventBits_t uxBits;
-        xEventGroupClearBits(nfcEventGroup, (1 << 0));
-        xEventGroupSetBits(nfcEventGroup, (1 << 1));
-        uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
-        if ((uxBits & (1 << 1)) != 0) {
+        bool shutdownSuccess = false;
+        
+        // Try shutdown sequence up to 3 times
+        for (int attempt = 1; attempt <= 3 && !shutdownSuccess; attempt++) {
+            logger::write("[payment] NFC shutdown attempt " + std::to_string(attempt), "info");
+            
+            xEventGroupClearBits(nfcEventGroup, (1 << 0));
+            xEventGroupSetBits(nfcEventGroup, (1 << 1));
+            
+            uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1500));
+            if ((uxBits & (1 << 1)) != 0) {
+                logger::write("[payment] NFC shutdown confirmed on attempt " + std::to_string(attempt), "info");
+                vTaskSuspend(nfcTaskHandle);
+                shutdownSuccess = true;
+            } else {
+                logger::write("[payment] NFC shutdown attempt " + std::to_string(attempt) + " failed, retrying...", "warning");
+                vTaskDelay(pdMS_TO_TICKS(200)); // Brief delay before retry
+            }
+        }
+        
+        if (!shutdownSuccess) {
+            logger::write("[payment] CRITICAL: NFC shutdown failed after 3 attempts", "error");
+            // Force suspend the task anyway to prevent indefinite blocking
             vTaskSuspend(nfcTaskHandle);
         }
+        
         cap.setThresholds(3, 5); // Restore normal sensitivity
+        logger::write("[payment] Touch sensitivity restored to normal (3,5)", "info");
     }
     
     // Reset payment state

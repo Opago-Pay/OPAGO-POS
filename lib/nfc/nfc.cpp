@@ -399,8 +399,9 @@ void idleMode(PN532_I2C *pn532_i2c)
 {
     setRFoff(true, pn532_i2c);
     
-    // CRITICAL: Re-enable touch input when entering idle mode
+    // CRITICAL: Re-enable normal touch input when entering idle mode
     suppressTouchDuringNFC(false);
+    setRFSafeMode(false); // Disable RF-safe mode - allow all keys
     logger::write("[nfcTask] Touch input re-enabled in idleMode", "info");
     
     while (!isRfOff) 
@@ -616,8 +617,10 @@ void nfcTask(void *args)
             int readAttempts = 0;
             bool isProcessingCard = false; // Flag to prevent re-detection during processing
             
-            // Suppress all touch input during NFC polling to prevent RF interference
-            suppressTouchDuringNFC(true);
+            // Enable RF-safe mode during NFC polling - allows * and # with enhanced debouncing
+            // This prevents accidental triggers from RF interference while keeping abort/PIN entry functional
+            suppressTouchDuringNFC(false); // Ensure full suppression is off
+            setRFSafeMode(true); // Enable RF-safe mode for * and # buttons only
             
             while (1) 
             {
@@ -627,6 +630,7 @@ void nfcTask(void *args)
                 {
                     logger::write("[nfcTask] Shutdown signal received - exiting NFC polling", "info");
                     suppressTouchDuringNFC(false);  // Re-enable touch before idleMode
+                    setRFSafeMode(false); // Disable RF-safe mode - allow all keys
                     logger::write("[nfcTask] Touch input re-enabled before shutdown", "info");
                     idleMode(pn532_i2c);
                     break;
@@ -641,7 +645,12 @@ void nfcTask(void *args)
                     // Hardware-assisted detection with automatic RF power management - no manual fallback needed
                     detectionResult = startAutoPollingForNTAG424(pn532, nfc);
                 } else {
+                    // CRITICAL: During card processing, don't poll and use longer delays to avoid busy-waiting
+                    // This prevents re-detection during withdrawal processing which could interfere with sand screen
+                    logger::write("[nfcTask] Card processing in progress - skipping polling to maintain sand screen", "debug");
                     detectionResult = 0; // Skip polling during processing
+                    vTaskDelay(pdMS_TO_TICKS(500)); // Longer delay during processing
+                    continue; // Skip to next loop iteration during processing
                 }
                 
                 // Handle card detection with proper screen sequence
@@ -690,6 +699,10 @@ void nfcTask(void *args)
                             screen::showSand();
                             logger::write("[nfcTask] Waiting for payment task to process LNURL withdrawal", "info");
                             
+                            // CRITICAL: Stop all NFC polling during withdrawal processing to prevent screen interference
+                            // This ensures sand screen stays visible and no NFC detection can override it
+                            logger::write("[nfcTask] Stopping NFC polling during withdrawal processing to protect sand screen", "info");
+                            
                             // Wait for payment task to complete the withdrawal (success or failure)
                             // Extended timeout to account for bolt11 invoice fetching (up to 10 retries + network delays)
                             EventBits_t withdrawResult = xEventGroupWaitBits(
@@ -700,10 +713,13 @@ void nfcTask(void *args)
                                 pdMS_TO_TICKS(20000) // 20 second timeout to accommodate bolt11 fetching
                             );
                             
+                            logger::write("[nfcTask] Withdrawal processing complete, resuming normal NFC polling", "info");
+                            
                             if (withdrawResult & LNURL_WITHDRAW_SUCCESS_BIT) {
                                 logger::write("[nfcTask] LNURL withdrawal successful", "info");
                                 screen::showSuccess();
                                 suppressTouchDuringNFC(false);
+                                setRFSafeMode(false); // Disable RF-safe mode - payment complete
                                 logger::write("[nfcTask] Touch input re-enabled after successful withdraw", "info");
                                 isProcessingCard = false; // Reset processing flag
                                 idleMode(pn532_i2c); // Enter idle mode
@@ -725,6 +741,7 @@ void nfcTask(void *args)
                                     logger::write("[nfcTask] Payment not made via other means, showing failed screen", "info");
                                     // CRITICAL: Re-enable touch input on failure to prevent keyboard lockup
                                     suppressTouchDuringNFC(false);
+                                    setRFSafeMode(false); // Disable RF-safe mode - return to QR screen
                                     logger::write("[nfcTask] Touch input re-enabled after withdrawal failure", "info");
                                     isProcessingCard = false; // Reset processing flag
                                     screen::showX();
@@ -734,6 +751,7 @@ void nfcTask(void *args)
                                     logger::write("[nfcTask] Payment made via other means, showing success", "info");
                                     screen::showSuccess();
                                     suppressTouchDuringNFC(false);
+                                    setRFSafeMode(false); // Disable RF-safe mode - payment complete
                                     logger::write("[nfcTask] Touch input re-enabled after successful payment via other means", "info");
                                     isProcessingCard = false; // Reset processing flag
                                     idleMode(pn532_i2c);
@@ -742,6 +760,7 @@ void nfcTask(void *args)
                                 logger::write("[nfcTask] LNURL withdrawal timeout - no response from payment task", "error");
                                 // CRITICAL: Re-enable touch input on timeout to prevent keyboard lockup
                                 suppressTouchDuringNFC(false);
+                                setRFSafeMode(false); // Disable RF-safe mode - return to QR screen
                                 logger::write("[nfcTask] Touch input re-enabled after withdrawal timeout", "info");
                                 isProcessingCard = false; // Reset processing flag
                                 screen::showX();
@@ -793,8 +812,9 @@ void nfcTask(void *args)
                 }
             }
             
-            // Safety: Re-enable touch if we somehow exit the polling loop
+            // Safety: Re-enable normal touch if we somehow exit the polling loop
             suppressTouchDuringNFC(false);
+            setRFSafeMode(false); // Disable RF-safe mode - return to normal operation
         } else {
             // Not in payment mode - ensure RF is OFF to prevent keyboard disruption
             logger::write("[nfcTask] Not in payment mode - ensuring RF is OFF", "debug");

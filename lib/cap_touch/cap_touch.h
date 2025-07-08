@@ -14,5 +14,7 @@ std::string getTouch();
 bool getLongTouch(char targetButton, unsigned long longTouchTime);
 bool getDebouncedLongTouch(char targetButton, unsigned long longTouchTime);
 void suppressTouchDuringNFC(bool suppress);
+void setRFSafeMode(bool enable);
+void setPinEntryMode(bool enable);
 
 #endif // CAP_TOUCH_H

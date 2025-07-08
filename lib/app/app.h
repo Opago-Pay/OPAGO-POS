@@ -6,6 +6,7 @@
 #include "logger.h"
 #include "screen.h"
 #include "keypad.h"
+#include "cap_touch.h"
 #include "util.h"
 #include "config.h"
 #include "cache.h"

@@ -12,6 +12,8 @@ static int currentDebounceDelay = 210;  // Will be updated based on sensitivity
 static int currentCapSensitivity = 10;  // Will be updated based on sensitivity
 static SemaphoreHandle_t keyStateMutex = NULL;
 static bool touchSuppressed = false;  // Flag to suppress touch during NFC operations
+static bool rfSafeMode = false;      // Flag for RF-safe mode allowing only * and # with enhanced debouncing
+static bool pinEntryMode = false;    // Flag for ultra-responsive PIN entry mode
 
 void updateSensitivity(int sensitivityPercent) {
     // Convert sensitivity (1-100) to cap sensitivity (20-1)
@@ -81,9 +83,51 @@ void capTouchTask(void* parameter) {
 std::string getTouch() {
     std::string result = "";
     if (xSemaphoreTake(keyStateMutex, portMAX_DELAY) == pdTRUE) {
-        if (!touchSuppressed && lastPressedKey != 0 && !isLongPress) {
-            result = std::string(1, lastPressedKey);
-            lastPressedKey = 0;  // Clear the key after reading
+        if (touchSuppressed) {
+            // Complete touch suppression - no keys work
+            xSemaphoreGive(keyStateMutex);
+            return result;
+        }
+        
+        if (rfSafeMode) {
+            // RF-safe mode: only allow * and # with enhanced debouncing
+            if (lastPressedKey != 0 && !isLongPress && (lastPressedKey == '*' || lastPressedKey == '#')) {
+                // Enhanced debouncing for RF interference - require key to be stable
+                static unsigned long lastRfSafeCheck = 0;
+                static char lastRfSafeKey = 0;
+                static int consecutiveReadings = 0;
+                const int REQUIRED_CONSECUTIVE_RF = 2; // Reduced from 3 to 2 for better responsiveness
+                const int RF_SAFE_DEBOUNCE_DELAY = 100; // Reduced from 150ms to 100ms for quicker response
+                
+                unsigned long currentTime = millis();
+                
+                if (lastPressedKey == lastRfSafeKey) {
+                    consecutiveReadings++;
+                } else {
+                    consecutiveReadings = 1;
+                    lastRfSafeKey = lastPressedKey;
+                }
+                
+                if (consecutiveReadings >= REQUIRED_CONSECUTIVE_RF && 
+                    (currentTime - lastRfSafeCheck) >= RF_SAFE_DEBOUNCE_DELAY) {
+                    result = std::string(1, lastPressedKey);
+                    lastPressedKey = 0;  // Clear the key after reading
+                    lastRfSafeCheck = currentTime;
+                    consecutiveReadings = 0;
+                    lastRfSafeKey = 0;
+                } else {
+                    // Don't clear the key yet - let it accumulate readings
+                }
+            } else {
+                // Clear non-allowed keys in RF-safe mode
+                lastPressedKey = 0;
+            }
+        } else {
+            // Normal mode - all keys work
+            if (lastPressedKey != 0 && !isLongPress) {
+                result = std::string(1, lastPressedKey);
+                lastPressedKey = 0;  // Clear the key after reading
+            }
         }
         xSemaphoreGive(keyStateMutex);
     }
@@ -166,6 +210,47 @@ void suppressTouchDuringNFC(bool suppress) {
             // Clear any pending touches when suppressing
             lastPressedKey = 0;
             isLongPress = false;
+        }
+        xSemaphoreGive(keyStateMutex);
+    }
+}
+
+void setRFSafeMode(bool enable) {
+    if (xSemaphoreTake(keyStateMutex, portMAX_DELAY) == pdTRUE) {
+        rfSafeMode = enable;
+        if (enable) {
+            // Clear any pending touches when entering RF-safe mode
+            lastPressedKey = 0;
+            isLongPress = false;
+        }
+        xSemaphoreGive(keyStateMutex);
+    }
+}
+
+void setPinEntryMode(bool enable) {
+    if (xSemaphoreTake(keyStateMutex, portMAX_DELAY) == pdTRUE) {
+        pinEntryMode = enable;
+        if (enable) {
+            // Clear any pending touches when entering PIN entry mode
+            lastPressedKey = 0;
+            isLongPress = false;
+            logger::write("[cap_touch] PIN entry mode enabled - optimized CPU scheduling", "info");
+            
+            // CRITICAL: Boost App Task priority during PIN entry for maximum responsiveness
+            extern TaskHandle_t appTaskHandle;
+            if (appTaskHandle != NULL) {
+                vTaskPrioritySet(appTaskHandle, configMAX_PRIORITIES - 2); // Highest priority except cap touch
+                logger::write("[cap_touch] App Task priority boosted for PIN entry", "info");
+            }
+        } else {
+            logger::write("[cap_touch] PIN entry mode disabled - restoring normal priorities", "info");
+            
+            // CRITICAL: Restore normal App Task priority
+            extern TaskHandle_t appTaskHandle;
+            if (appTaskHandle != NULL) {
+                vTaskPrioritySet(appTaskHandle, 2); // Back to normal priority
+                logger::write("[cap_touch] App Task priority restored to normal", "info");
+            }
         }
         xSemaphoreGive(keyStateMutex);
     }
