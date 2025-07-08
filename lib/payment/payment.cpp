@@ -579,6 +579,23 @@ bool startUnifiedPaymentFlow(const double &amount, const std::string &pin) {
 PaymentState initializePaymentFlow(const double &amount, const std::string &pin, std::string &lnurlQR) {
     logger::write("[payment] Initializing payment flow v3.0.0", "info");
     
+    // CRITICAL: Reset payment state for new payment session
+    paymentisMade = false;
+    logger::write("[payment] Reset paymentisMade to false for new payment session", "info");
+    
+    // Clear any lingering event bits from previous payment sessions
+    xEventGroupClearBits(appEventGroup, LNURL_WITHDRAW_REQUEST_BIT | LNURL_WITHDRAW_SUCCESS_BIT | LNURL_WITHDRAW_FAILED_BIT);
+    logger::write("[payment] Cleared LNURL withdrawal event bits for new payment session", "info");
+    
+    // Reset hybrid payment state
+    extern bool hybridInvoiceFetched;
+    extern std::string hybridBolt11Invoice;
+    extern std::string cardDetectedLnurlw;
+    hybridInvoiceFetched = false;
+    hybridBolt11Invoice = "";
+    cardDetectedLnurlw = "";
+    logger::write("[payment] Reset hybrid payment state for new payment session", "info");
+    
     // Clear any previous API PIN
     extern std::string apiReturnedPin;
     apiReturnedPin = "";
