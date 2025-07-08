@@ -117,7 +117,7 @@ bool activateNTAG424DNA(PN532_I2C* pn532_i2c, Adafruit_PN532* nfc) {
 }
 
 // InAutoPoll implementation for NTAG424 detection with automatic RF power sweeping
-bool startAutoPollingForNTAG424(PN532* pn532, uint8_t *uid, uint8_t *uidLength) {
+bool startAutoPollingForNTAG424(PN532* pn532, Adafruit_PN532* nfc) {
     logger::write("[nfcTask] Starting InAutoPoll for NTAG424 with automatic RF power sweeping", "info");
     
     // Configure target types for ISO14443A (NTAG424 compatible)
@@ -129,17 +129,43 @@ bool startAutoPollingForNTAG424(PN532* pn532, uint8_t *uid, uint8_t *uidLength) 
     bool autoResult = pn532->inAutoPoll(1, 2, targetTypes, sizeof(targetTypes), 1000);
     
     if (autoResult) {
-        logger::write("[nfcTask] InAutoPoll detected target - processing", "info");
+        logger::write("[nfcTask] InAutoPoll detected target - attempting direct NTAG424 read", "info");
         
-        // Get the detected target info from the InAutoPoll response
-        // InAutoPoll automatically handles the target activation, so we just read the UID
-        bool readResult = pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, uidLength, 100, true);
+        // Skip UID reading completely - go straight to NTAG424 data reading
+        uint8_t data[256];
+        uint8_t bytesread = 0;
         
-        if (readResult) {
-            logger::write("[nfcTask] InAutoPoll successfully detected and read NTAG424", "info");
-            return true;
+        // Try NTAG424 read multiple times for static cards
+        for (int attempt = 0; attempt < 6; attempt++) {
+            bytesread = nfc->ntag424_ISOReadFile(data);
+            if (bytesread > 0) {
+                break;
+            }
+            
+            if (attempt < 5) { // Don't delay after the last attempt
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+        }
+        
+        if (bytesread > 0) {
+            // Successfully read NTAG424 data
+            if (data[bytesread - 1] != '\0') {
+                data[bytesread] = '\0'; // Add null terminator
+            }
+            
+            // Store the LNURL data
+            lnurlwNFC = String((char*)data);
+            logger::write(("[nfcTask] InAutoPoll + NTAG424 read successful: " + lnurlwNFC).c_str(), "info");
+            
+            // Validate it's a proper LNURL-withdraw
+            if (isLnurlw()) {
+                return true;
+            } else {
+                logger::write("[nfcTask] Card detected but not a valid LNURL-withdraw", "warning");
+                return false;
+            }
         } else {
-            logger::write("[nfcTask] InAutoPoll detected target but UID read failed", "debug");
+            logger::write("[nfcTask] InAutoPoll detected target but NTAG424 read failed", "warning");
             return false;
         }
     }
@@ -396,8 +422,8 @@ void idleMode(PN532_I2C *pn532_i2c)
 bool sendQRCodeToPhone(PN532_I2C* pn532_i2c, const String& qrcodeData) {
     // Set the PN532 to card emulation mode
     uint8_t command[] = {0x8C, 0x00}; // TgInitAsTarget command
-    uint8_t response[256]; // Buffer to hold the response
-    int result = pn532_i2c->writeCommand(command, sizeof(command), response, (uint16_t)sizeof(response));
+    uint8_t response[64]; // Buffer to hold the response - reduced size to fix uint8_t overflow
+    int result = pn532_i2c->writeCommand(command, sizeof(command), response, sizeof(response));
 
     if (result == 0) {
         logger::write("PN532 set to card emulation mode", "debug");
@@ -426,14 +452,14 @@ bool sendQRCodeToPhone(PN532_I2C* pn532_i2c, const String& qrcodeData) {
         // Set the NDEF message for the emulated tag
         uint8_t setDataCommand[512] = {0x8E, 0x00, 0x00, 0x00}; // TgSetData command
         memcpy(setDataCommand + 2, ndefMessage, ndefMessageLength);
-        result = pn532_i2c->writeCommand(setDataCommand, ndefMessageLength + 2, response, (uint16_t)sizeof(response));
+        result = pn532_i2c->writeCommand(setDataCommand, ndefMessageLength + 2, response, sizeof(response));
 
         if (result == 0) {
             logger::write("NDEF message set for emulated tag", "debug");
 
             // Set the emulated tag to be a generic NFC tag
             uint8_t tagTypeCommand[] = {0x8C, 0x02, 0x00, 0x00}; // TgInitAsTarget command with generic target parameters
-            result = pn532_i2c->writeCommand(tagTypeCommand, sizeof(tagTypeCommand), response, (uint16_t)sizeof(response));
+            result = pn532_i2c->writeCommand(tagTypeCommand, sizeof(tagTypeCommand), response, sizeof(response));
 
             if (result == 0) {
                 logger::write("Emulated tag set as generic NFC tag", "debug");
@@ -604,37 +630,17 @@ void nfcTask(void *args)
                 loopCounter++;
                 
                 // Use InAutoPoll for automatic RF power sweeping and superior NTAG424 detection
-                // This replaces all the manual RF cycling, power management, and timing complexity
-                success = startAutoPollingForNTAG424(pn532, uid, &uidLength);
-                
-                // Fallback to manual polling only if InAutoPoll fails completely  
-                if (!success && (loopCounter % 5 == 0)) {
-                    logger::write("[nfcTask] InAutoPoll unsuccessful - attempting manual fallback", "debug");
-                    
-                    // Show QR code to maintain UI responsiveness
-                    screen::showPaymentQRCodeScreen(qrcodeData);
-                    
-                    // Simple manual detection as fallback (much simpler than before)
-                    uint16_t timeout = 300;
-                    success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, timeout);
-                    
-                    if (!success) {
-                        // Basic RF cycle for manual fallback
-                        setRFoff(true, pn532_i2c);
-                        vTaskDelay(pdMS_TO_TICKS(50));
-                        setRFoff(false, pn532_i2c);
-                        vTaskDelay(pdMS_TO_TICKS(50));
-                    }
-                }
+                // Hardware-assisted detection with automatic RF power management - no manual fallback needed
+                success = startAutoPollingForNTAG424(pn532, nfc);
                 
                 if (success) {
-                    // Card detected - show NFC screen and start reading
-                    logger::write("[nfcTask] Card detected - reading", "info");
+                    // Card detected and NTAG424 data read successfully by InAutoPoll
+                    logger::write("[nfcTask] Card detected and NTAG424 data read successfully", "info");
                     screen::showNFC();
                     
-                    // Reading and processing the NFC data
+                    // InAutoPoll already read and validated the NTAG424 data
                     xEventGroupSetBits(appEventGroup, (1<<0)); // Signal card detected to payment task
-                    bool result = readAndProcessNFCData(pn532_i2c, pn532, nfc, nfcAdapter, readAttempts);
+                    bool result = true; // Skip readAndProcessNFCData since InAutoPoll already did it
                     if (result) 
                     {
                         logger::write("[nfcTask] NFC card reading exited with success", "info");
