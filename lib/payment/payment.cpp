@@ -723,15 +723,21 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
                 if (withdrawSuccess) {
                     logger::write("[payment] LNURL-withdraw successful", "info");
                     xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_SUCCESS_BIT);
+                    // Wait longer to ensure NFC task receives the success signal
+                    vTaskDelay(pdMS_TO_TICKS(200)); 
                     paymentisMade = true;
                     return PaymentState::PAYMENT_SUCCESS;
                 } else {
                     logger::write("[payment] LNURL-withdraw failed", "info");
                     xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_FAILED_BIT);
+                    // Wait longer to ensure NFC task receives the failure signal
+                    vTaskDelay(pdMS_TO_TICKS(200));
                 }
             } else {
                 logger::write("[payment] Cannot process LNURL-withdraw - no bolt11 invoice available", "error");
                 xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_FAILED_BIT);
+                // Wait longer to ensure NFC task receives the failure signal
+                vTaskDelay(pdMS_TO_TICKS(200));
             }
         } else {
             logger::write("[payment] LNURL withdrawal request received but no LNURL data available", "error");

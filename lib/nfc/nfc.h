@@ -48,6 +48,7 @@ void recoverI2CBus();
 void setRFoff(bool turnOff, PN532_I2C* pn532_i2c);
 bool setRFPower(PN532_I2C* pn532_i2c, int power, int gain = 0x40, int modulation = 0x03, int miller = 0x0E);
 bool activateNTAG424DNA(PN532_I2C* pn532_i2c, Adafruit_PN532* nfc);
+bool startAutoPollingForNTAG424(PN532* pn532, uint8_t *uid, uint8_t *uidLength);
 void nfcTask(void *args);
 void scanDevices(TwoWire *w);
 void printRecordPayload(const uint8_t* payload, size_t len);

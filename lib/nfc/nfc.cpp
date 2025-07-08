@@ -116,6 +116,37 @@ bool activateNTAG424DNA(PN532_I2C* pn532_i2c, Adafruit_PN532* nfc) {
     return true;
 }
 
+// InAutoPoll implementation for NTAG424 detection with automatic RF power sweeping
+bool startAutoPollingForNTAG424(PN532* pn532, uint8_t *uid, uint8_t *uidLength) {
+    logger::write("[nfcTask] Starting InAutoPoll for NTAG424 with automatic RF power sweeping", "info");
+    
+    // Configure target types for ISO14443A (NTAG424 compatible)
+    uint8_t targetTypes[] = {PN532_MIFARE_ISO14443A}; // Type A targets (includes NTAG424)
+    
+    // Start InAutoPoll with optimal settings for NTAG424 detection
+    // pollNr=1: Check for 1 target max to minimize processing
+    // period=2: Poll every 300ms (2 * 150ms) for good balance of responsiveness and power
+    bool autoResult = pn532->inAutoPoll(1, 2, targetTypes, sizeof(targetTypes), 1000);
+    
+    if (autoResult) {
+        logger::write("[nfcTask] InAutoPoll detected target - processing", "info");
+        
+        // Get the detected target info from the InAutoPoll response
+        // InAutoPoll automatically handles the target activation, so we just read the UID
+        bool readResult = pn532->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, uidLength, 100, true);
+        
+        if (readResult) {
+            logger::write("[nfcTask] InAutoPoll successfully detected and read NTAG424", "info");
+            return true;
+        } else {
+            logger::write("[nfcTask] InAutoPoll detected target but UID read failed", "debug");
+            return false;
+        }
+    }
+    
+    return false; // No targets detected
+}
+
 void recoverI2CBus() {
     logger::write("[nfcTask] Attempting I2C bus recovery for Error 263 mitigation", "info");
     
@@ -337,6 +368,11 @@ bool isLnurlw(void) {
 void idleMode(PN532_I2C *pn532_i2c)
 {
     setRFoff(true, pn532_i2c);
+    
+    // CRITICAL: Re-enable touch input when entering idle mode
+    suppressTouchDuringNFC(false);
+    logger::write("[nfcTask] Touch input re-enabled in idleMode", "info");
+    
     while (!isRfOff) 
     {
         setRFoff(true, pn532_i2c);
@@ -559,54 +595,35 @@ void nfcTask(void *args)
                 if ((uxBits & (1 << 1)) != 0) 
                 {
                     logger::write("[nfcTask] Shutdown signal received - exiting NFC polling", "info");
-                    suppressTouchDuringNFC(false);
+                    suppressTouchDuringNFC(false);  // Re-enable touch before idleMode
+                    logger::write("[nfcTask] Touch input re-enabled before shutdown", "info");
                     idleMode(pn532_i2c);
                     break;
                 }
 
                 loopCounter++;
                 
-                // NTAG424 DNA wake-up sequence before each read attempt
-                if (loopCounter % 2 == 1) { // Activate every other attempt to balance performance
-                    activateNTAG424DNA(pn532_i2c, nfc);
-                }
+                // Use InAutoPoll for automatic RF power sweeping and superior NTAG424 detection
+                // This replaces all the manual RF cycling, power management, and timing complexity
+                success = startAutoPollingForNTAG424(pn532, uid, &uidLength);
                 
-                // Aggressive polling with shorter timeouts for better responsiveness
-                uint16_t timeout = 300; // Shorter, consistent timeout for active polling
-                success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, timeout);
-                
-                // More frequent RF cycling specifically for NTAG424 DNA cards
-                if (!success && (loopCounter % 2 == 0)) {
-                    logger::write("[nfcTask] No card detected after 2 attempts - cycling RF for NTAG424 DNA", "debug");
+                // Fallback to manual polling only if InAutoPoll fails completely  
+                if (!success && (loopCounter % 5 == 0)) {
+                    logger::write("[nfcTask] InAutoPoll unsuccessful - attempting manual fallback", "debug");
                     
                     // Show QR code to maintain UI responsiveness
                     screen::showPaymentQRCodeScreen(qrcodeData);
                     
-                    // Enhanced RF cycle for NTAG424 DNA wake-up
-                    setRFoff(true, pn532_i2c);
-                    vTaskDelay(pdMS_TO_TICKS(100)); // Longer RF off period for complete power cycle
+                    // Simple manual detection as fallback (much simpler than before)
+                    uint16_t timeout = 300;
+                    success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, timeout);
                     
-                    setRFoff(false, pn532_i2c);
-                    
-                    // Force RF power configuration for NTAG424 DNA compatibility
-                    setRFPower(pn532_i2c, 210, 0x58, 0x01, 0x01); // High power wake-up configuration
-                    vTaskDelay(pdMS_TO_TICKS(80)); // Longer stabilization for NTAG424 DNA
-                    
-                    // Complete RF reinitialization every 6th attempt for stubborn cards
-                    if (loopCounter % 6 == 0) {
-                        logger::write("[nfcTask] Performing complete RF reinitialization for NTAG424 DNA", "info");
-                        
-                        // Reinitialize SAM configuration for clean RF field
-                        if (pn532->SAMConfig()) {
-                            logger::write("[nfcTask] SAM reconfiguration successful", "debug");
-                        } else {
-                            logger::write("[nfcTask] SAM reconfiguration failed", "info");
-                        }
-                        
-                        // Extra NTAG424 DNA specific configuration
-                        setRFPower(pn532_i2c, 230, 0x68, 0x01, 0x01); // Maximum power for stubborn cards
-                        vTaskDelay(pdMS_TO_TICKS(100)); // Extra stabilization after full reset
-                        setRFPower(pn532_i2c, 190, 0x48, 0x02, 0x0E); // Back to normal reading power
+                    if (!success) {
+                        // Basic RF cycle for manual fallback
+                        setRFoff(true, pn532_i2c);
+                        vTaskDelay(pdMS_TO_TICKS(50));
+                        setRFoff(false, pn532_i2c);
+                        vTaskDelay(pdMS_TO_TICKS(50));
                     }
                 }
                 
@@ -698,24 +715,14 @@ void nfcTask(void *args)
                 }
                 else 
                 {
-                    // No card detected - continue polling with optimized timing for NTAG424 DNA
-                    if (loopCounter % 6 == 0) {
-                        logger::write("[nfcTask] No card detected after 6 attempts", "info");
+                    // No card detected - InAutoPoll handles timing internally but add minimal delay for I2C stability
+                    if (loopCounter % 10 == 0) {
+                        logger::write("[nfcTask] No card detected after 10 InAutoPoll attempts", "info");
                     }
                     
-                    // Optimized delay for NTAG424 DNA responsiveness
-                    uint32_t pollDelay;
-                    int cyclePosition = loopCounter % 6;
-                    
-                    if (cyclePosition <= 2) {
-                        pollDelay = 60;  // Very fast polling for immediate detection
-                    } else if (cyclePosition <= 4) {
-                        pollDelay = 80;  // Medium speed polling
-                    } else {
-                        pollDelay = 120; // Slightly longer for I2C recovery
-                    }
-                    
-                    vTaskDelay(pdMS_TO_TICKS(pollDelay));
+                    // Minimal delay since InAutoPoll handles most timing internally
+                    // InAutoPoll already includes 300ms polling periods (period=2 * 150ms)
+                    vTaskDelay(pdMS_TO_TICKS(50)); // Just enough for I2C bus stability
                 }
             }
             

@@ -383,6 +383,73 @@ bool PN532::setRFField(uint8_t autoRFCA, uint8_t rFOnOff)
     return (0 < HAL(readResponse)(pn532_packetbuffer, sizeof(pn532_packetbuffer)));
 }
 
+/**************************************************************************/
+/*!
+    Starts automatic polling for targets using InAutoPoll command.
+    This enables automatic RF power sweeping and better NTAG424 detection.
+
+    @param  pollNr      Maximum number of targets to poll for (1-255)
+    @param  period      Polling period in units of 150ms (1-255) 
+    @param  type        Array of target types to poll for
+    @param  typeLength  Length of type array
+    @param  timeout     Timeout in milliseconds
+    
+    @returns true if command executed successfully, false for error
+*/
+/**************************************************************************/
+bool PN532::inAutoPoll(uint8_t pollNr, uint8_t period, uint8_t *type, uint8_t typeLength, uint16_t timeout)
+{
+    pn532_packetbuffer[0] = PN532_COMMAND_INAUTOPOLL;
+    pn532_packetbuffer[1] = pollNr;
+    pn532_packetbuffer[2] = period;
+    
+    for (uint8_t i = 0; i < typeLength; i++) {
+        pn532_packetbuffer[3 + i] = type[i];
+    }
+
+    if (HAL(writeCommand)(pn532_packetbuffer, 3 + typeLength)) {
+        return false;  // command failed
+    }
+
+    // Read response with timeout
+    int16_t status = HAL(readResponse)(pn532_packetbuffer, sizeof(pn532_packetbuffer), timeout);
+    if (status < 0) {
+        return false;
+    }
+
+    // Check if targets were found
+    if (pn532_packetbuffer[0] > 0) {
+        DMSG("InAutoPoll found ");
+        DMSG_HEX(pn532_packetbuffer[0]);
+        DMSG(" targets\n");
+        return true;
+    }
+    
+    return false; // No targets found
+}
+
+/**************************************************************************/
+/*!
+    Stops automatic polling by sending a dummy command to interrupt InAutoPoll.
+    
+    @returns true if stopped successfully, false for error
+*/
+/**************************************************************************/
+bool PN532::stopAutoPoll()
+{
+    // Send GetFirmwareVersion command to interrupt InAutoPoll
+    pn532_packetbuffer[0] = PN532_COMMAND_GETFIRMWAREVERSION;
+    
+    if (HAL(writeCommand)(pn532_packetbuffer, 1)) {
+        return false;
+    }
+    
+    // Read response (may timeout if no autopoll was running)
+    HAL(readResponse)(pn532_packetbuffer, sizeof(pn532_packetbuffer), 100);
+    
+    return true;
+}
+
 /***** ISO14443A Commands ******/
 
 /**************************************************************************/

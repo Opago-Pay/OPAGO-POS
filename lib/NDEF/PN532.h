@@ -163,6 +163,10 @@ public:
     bool readPassiveTargetID(uint8_t cardbaudrate, uint8_t *uid, uint8_t *uidLength, uint16_t timeout = 1000, bool inlist = false);
     bool inDataExchange(uint8_t *send, uint8_t sendLength, uint8_t *response, uint8_t *responseLength);
     bool inCommunicateThru(uint8_t *send, uint8_t sendLength, uint8_t *response, uint8_t *responseLength);
+    
+    // InAutoPoll for automatic target detection with RF power sweeping
+    bool inAutoPoll(uint8_t pollNr, uint8_t period, uint8_t *type, uint8_t typeLength, uint16_t timeout = 1000);
+    bool stopAutoPoll();
 
     // Mifare Classic functions
     bool mifareclassic_IsFirstBlock (uint32_t uiBlock);
