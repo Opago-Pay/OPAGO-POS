@@ -52,6 +52,35 @@ void screenTask(void* parameter) {
 	const unsigned long STATUS_UPDATE_INTERVAL = 2100;
 	bool lastOnlineStatus = onlineStatus;
 	
+	// Minimum display time tracking
+	static unsigned long nfcScreenStartTime = 0;
+	static unsigned long nfcFailedScreenStartTime = 0;
+	static unsigned long nfcSuccessScreenStartTime = 0;
+	static unsigned long successScreenStartTime = 0;
+	
+	// Minimum display durations (in milliseconds)
+	const unsigned long NFC_MIN_DISPLAY_TIME = 500;
+	const unsigned long NFC_FAILED_MIN_DISPLAY_TIME = 1000;
+	const unsigned long NFC_SUCCESS_MIN_DISPLAY_TIME = 1000;
+	const unsigned long SUCCESS_MIN_DISPLAY_TIME = 4200;
+	
+	// Helper function to check if minimum display time has elapsed
+	auto canTransitionFromScreen = [&](const std::string& fromScreen) -> bool {
+		unsigned long currentTime = millis();
+		
+		if (fromScreen == "NFC") {
+			return (currentTime - nfcScreenStartTime) >= NFC_MIN_DISPLAY_TIME;
+		} else if (fromScreen == "NFCfailed") {
+			return (currentTime - nfcFailedScreenStartTime) >= NFC_FAILED_MIN_DISPLAY_TIME;
+		} else if (fromScreen == "NFCsuccess") {
+			return (currentTime - nfcSuccessScreenStartTime) >= NFC_SUCCESS_MIN_DISPLAY_TIME;
+		} else if (fromScreen == "success") {
+			return (currentTime - successScreenStartTime) >= SUCCESS_MIN_DISPLAY_TIME;
+		}
+		
+		return true; // No minimum time restriction for other screens
+	};
+	
 	// Connection status display variables
 	static unsigned long lastConnectionStatusCheck = 0;
 	const unsigned long CONNECTION_STATUS_CHECK_INTERVAL = 100; // Check every 100ms for responsiveness
@@ -119,7 +148,7 @@ void screenTask(void* parameter) {
 						// Always process PIN, contrast and sensitivity input updates as they show progress
 						shouldProcess = true;
 					} else {
-						// For all other screens, always process if it's different from current screen
+						// For all other screens, check minimum display time before transitioning
 						std::string newScreen;
 						switch (msg.type) {
 							case ScreenMessage::MessageType::HOME: newScreen = "home"; break;
@@ -137,7 +166,21 @@ void screenTask(void* parameter) {
 							case ScreenMessage::MessageType::SENSITIVITY_INPUT: newScreen = "sensitivityInput"; break;
 							default: newScreen = currentScreen; break;
 						}
-						shouldProcess = (currentScreen != newScreen);
+						
+						// Check if screen is different and if we can transition from current screen
+						if (currentScreen != newScreen) {
+							if (canTransitionFromScreen(currentScreen)) {
+								shouldProcess = true;
+							} else {
+								// Re-queue the message for later processing if minimum time hasn't elapsed
+								shouldProcess = false;
+								xQueueSend(screenQueue, &msg, 0); // Re-queue without blocking
+								logger::write("[screen] Minimum display time not met for " + currentScreen + 
+								             ", re-queuing transition to " + newScreen, "debug");
+							}
+						} else {
+							shouldProcess = false;
+						}
 					}
 					
 					if (shouldProcess) {
@@ -160,6 +203,7 @@ void screenTask(void* parameter) {
 								screen_tft::renderJPEG("/NFC.jpg", 0, 0, 1);
 								currentScreen = "NFC";
 								lastScreen = currentScreen;
+								nfcScreenStartTime = millis(); // Record start time for minimum display duration
 								break;
 								
 							case ScreenMessage::MessageType::ENTER_AMOUNT:
@@ -184,18 +228,21 @@ void screenTask(void* parameter) {
 								screen_tft::renderJPEG("/NFCfailed.jpg", 0, 0, 1);
 								currentScreen = "NFCfailed";
 								lastScreen = currentScreen;
+								nfcFailedScreenStartTime = millis(); // Record start time for minimum display duration
 								break;
 								
 							case ScreenMessage::MessageType::NFC_SUCCESS:
 								screen_tft::renderJPEG("/NFCsuccess.jpg", 0, 0, 1);
 								currentScreen = "NFCsuccess";
 								lastScreen = currentScreen;
+								nfcSuccessScreenStartTime = millis(); // Record start time for minimum display duration
 								break;
 								
 							case ScreenMessage::MessageType::SUCCESS:
 								screen_tft::renderJPEG("/success.jpg", 0, 0, 1);
 								currentScreen = "success";
 								lastScreen = currentScreen;
+								successScreenStartTime = millis(); // Record start time for minimum display duration
 								break;
 								
 							case ScreenMessage::MessageType::SAND:

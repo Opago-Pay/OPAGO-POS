@@ -123,10 +123,10 @@ bool startAutoPollingForNTAG424(PN532* pn532, Adafruit_PN532* nfc) {
     // Configure target types for ISO14443A (NTAG424 compatible)
     uint8_t targetTypes[] = {PN532_MIFARE_ISO14443A}; // Type A targets (includes NTAG424)
     
-    // Start InAutoPoll with optimal settings for NTAG424 detection
+    // Start InAutoPoll with enhanced settings for better static card detection
     // pollNr=1: Check for 1 target max to minimize processing
-    // period=2: Poll every 300ms (2 * 150ms) for good balance of responsiveness and power
-    bool autoResult = pn532->inAutoPoll(1, 2, targetTypes, sizeof(targetTypes), 1000);
+    // period=4: Poll every 600ms (4 * 150ms) for better static card detection with longer RF sweeps
+    bool autoResult = pn532->inAutoPoll(1, 4, targetTypes, sizeof(targetTypes), 1500);
     
     if (autoResult) {
         logger::write("[nfcTask] InAutoPoll detected target - attempting direct NTAG424 read", "info");
@@ -610,6 +610,7 @@ void nfcTask(void *args)
             }
             logger::write("[nfcTask] Starting NFC polling for payment", "info");
             int readAttempts = 0;
+            bool isProcessingCard = false; // Flag to prevent re-detection during processing
             
             // Suppress all touch input during NFC polling to prevent RF interference
             suppressTouchDuringNFC(true);
@@ -629,13 +630,19 @@ void nfcTask(void *args)
 
                 loopCounter++;
                 
-                // Use InAutoPoll for automatic RF power sweeping and superior NTAG424 detection
-                // Hardware-assisted detection with automatic RF power management - no manual fallback needed
-                success = startAutoPollingForNTAG424(pn532, nfc);
+                // Only poll for new cards when not processing an existing card
+                if (!isProcessingCard) {
+                    // Use InAutoPoll for automatic RF power sweeping and superior NTAG424 detection
+                    // Hardware-assisted detection with automatic RF power management - no manual fallback needed
+                    success = startAutoPollingForNTAG424(pn532, nfc);
+                } else {
+                    success = false; // Skip polling during processing
+                }
                 
                 if (success) {
                     // Card detected and NTAG424 data read successfully by InAutoPoll
                     logger::write("[nfcTask] Card detected and NTAG424 data read successfully", "info");
+                    isProcessingCard = true; // Prevent re-detection during processing
                     screen::showNFC();
                     
                     // InAutoPoll already read and validated the NTAG424 data
@@ -667,12 +674,13 @@ void nfcTask(void *args)
                         logger::write("[nfcTask] Waiting for payment task to process LNURL withdrawal", "info");
                         
                         // Wait for payment task to complete the withdrawal (success or failure)
+                        // Extended timeout to account for bolt11 invoice fetching (up to 10 retries + network delays)
                         EventBits_t withdrawResult = xEventGroupWaitBits(
                             appEventGroup, 
                             LNURL_WITHDRAW_SUCCESS_BIT | LNURL_WITHDRAW_FAILED_BIT,
                             pdTRUE,  // Clear bits after waiting
                             pdFALSE, // Wait for ANY of the bits (OR operation)
-                            pdMS_TO_TICKS(10000) // 10 second timeout
+                            pdMS_TO_TICKS(20000) // 20 second timeout to accommodate bolt11 fetching
                         );
                         
                         if (withdrawResult & LNURL_WITHDRAW_SUCCESS_BIT) {
@@ -680,6 +688,7 @@ void nfcTask(void *args)
                             screen::showSuccess();
                             suppressTouchDuringNFC(false);
                             logger::write("[nfcTask] Touch input re-enabled after successful withdraw", "info");
+                            isProcessingCard = false; // Reset processing flag
                             idleMode(pn532_i2c); // Enter idle mode
                             paymentisMade = true;
                         } else if (withdrawResult & LNURL_WITHDRAW_FAILED_BIT) {
@@ -687,6 +696,10 @@ void nfcTask(void *args)
                             vTaskDelay(pdMS_TO_TICKS(2000)); // Brief delay to show sand screen
                             if (!paymentisMade) {
                                 logger::write("[nfcTask] Payment not made via other means, showing failed screen", "info");
+                                // CRITICAL: Re-enable touch input on failure to prevent keyboard lockup
+                                suppressTouchDuringNFC(false);
+                                logger::write("[nfcTask] Touch input re-enabled after withdrawal failure", "info");
+                                isProcessingCard = false; // Reset processing flag
                                 screen::showX();
                                 vTaskDelay(pdMS_TO_TICKS(2000)); // Show X briefly
                                 screen::showPaymentQRCodeScreen(qrcodeData);
@@ -694,10 +707,16 @@ void nfcTask(void *args)
                                 logger::write("[nfcTask] Payment made via other means, showing success", "info");
                                 screen::showSuccess();
                                 suppressTouchDuringNFC(false);
+                                logger::write("[nfcTask] Touch input re-enabled after successful payment via other means", "info");
+                                isProcessingCard = false; // Reset processing flag
                                 idleMode(pn532_i2c);
                             }
                         } else {
                             logger::write("[nfcTask] LNURL withdrawal timeout - no response from payment task", "error");
+                            // CRITICAL: Re-enable touch input on timeout to prevent keyboard lockup
+                            suppressTouchDuringNFC(false);
+                            logger::write("[nfcTask] Touch input re-enabled after withdrawal timeout", "info");
+                            isProcessingCard = false; // Reset processing flag
                             screen::showX();
                             vTaskDelay(pdMS_TO_TICKS(2000));
                             screen::showPaymentQRCodeScreen(qrcodeData);
@@ -711,6 +730,7 @@ void nfcTask(void *args)
                         logger::write("[nfcTask] NFC card reading exited with failure", "debug");
                         screen::showNFCfailed();
                         lnurlwNFC = "";
+                        isProcessingCard = false; // Reset processing flag on failure
                         // No delay needed - continue polling immediately for faster re-detection
                         xEventGroupClearBits(appEventGroup, (1<<0)); // Clear card processing bit
                     }
@@ -721,14 +741,19 @@ void nfcTask(void *args)
                 }
                 else 
                 {
-                    // No card detected - InAutoPoll handles timing internally but add minimal delay for I2C stability
-                    if (loopCounter % 10 == 0) {
-                        logger::write("[nfcTask] No card detected after 10 InAutoPoll attempts", "info");
+                    if (isProcessingCard) {
+                        // While processing a card, wait longer to avoid busy-waiting
+                        vTaskDelay(pdMS_TO_TICKS(200));
+                    } else {
+                        // No card detected - InAutoPoll handles timing internally but add minimal delay for I2C stability
+                        if (loopCounter % 10 == 0) {
+                            logger::write("[nfcTask] No card detected after 10 InAutoPoll attempts", "info");
+                        }
+                        
+                        // Minimal delay since InAutoPoll handles most timing internally
+                        // InAutoPoll already includes 600ms polling periods (period=4 * 150ms)
+                        vTaskDelay(pdMS_TO_TICKS(50)); // Just enough for I2C bus stability
                     }
-                    
-                    // Minimal delay since InAutoPoll handles most timing internally
-                    // InAutoPoll already includes 300ms polling periods (period=2 * 150ms)
-                    vTaskDelay(pdMS_TO_TICKS(50)); // Just enough for I2C bus stability
                 }
             }
             
