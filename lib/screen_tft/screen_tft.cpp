@@ -623,6 +623,11 @@ namespace screen_tft {
 	}
 
 	bool shouldShowWifiLostScreen() {
+		// Never show WiFi lost screen if we're in offline mode
+		if (offlineMode) {
+			return false;
+		}
+		
 		// Only show WiFi lost screen if we've been offline for more than 10 seconds
 		// and we're currently in the "showing WiFi lost screen" state
 		if (!onlineStatus && connectionLossStartTime > 0) {

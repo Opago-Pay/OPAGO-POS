@@ -52,17 +52,27 @@ void screenTask(void* parameter) {
 	const unsigned long STATUS_UPDATE_INTERVAL = 2100;
 	bool lastOnlineStatus = onlineStatus;
 	
-	// Minimum display time tracking
+	// Screen timing tracking
 	static unsigned long nfcScreenStartTime = 0;
 	static unsigned long nfcFailedScreenStartTime = 0;
 	static unsigned long nfcSuccessScreenStartTime = 0;
 	static unsigned long successScreenStartTime = 0;
+	static unsigned long xScreenStartTime = 0;
+	static unsigned long xScreen2StartTime = 0;
 	
-	// Minimum display durations (in milliseconds)
+	// Minimum display durations (in milliseconds) - enforced before any transition
 	const unsigned long NFC_MIN_DISPLAY_TIME = 500;
 	const unsigned long NFC_FAILED_MIN_DISPLAY_TIME = 1000;
-	const unsigned long NFC_SUCCESS_MIN_DISPLAY_TIME = 1000;
-	const unsigned long SUCCESS_MIN_DISPLAY_TIME = 4200;
+	const unsigned long NFC_SUCCESS_MIN_DISPLAY_TIME = 2000;  // Increased to ensure proper visibility
+	const unsigned long SUCCESS_MIN_DISPLAY_TIME = 2100;  // Minimum before skip allowed
+	const unsigned long X_MIN_DISPLAY_TIME = 500;  // Brief minimum for X screen
+	
+	// Intended display durations (in milliseconds) - normal auto-transition time
+	const unsigned long SUCCESS_INTENDED_DISPLAY_TIME = 4200;  // Normal display time
+	const unsigned long X_INTENDED_DISPLAY_TIME = 2100;  // Normal X screen time
+	
+	// Early transition trigger flag
+	static bool earlyTransitionRequested = false;
 	
 	// Helper function to check if minimum display time has elapsed
 	auto canTransitionFromScreen = [&](const std::string& fromScreen) -> bool {
@@ -76,9 +86,24 @@ void screenTask(void* parameter) {
 			return (currentTime - nfcSuccessScreenStartTime) >= NFC_SUCCESS_MIN_DISPLAY_TIME;
 		} else if (fromScreen == "success") {
 			return (currentTime - successScreenStartTime) >= SUCCESS_MIN_DISPLAY_TIME;
+		} else if (fromScreen == "X") {
+			return (currentTime - xScreenStartTime) >= X_MIN_DISPLAY_TIME;
 		}
 		
 		return true; // No minimum time restriction for other screens
+	};
+	
+	// Helper function to check if intended display time has elapsed for auto-transitions
+	auto shouldAutoTransition = [&](const std::string& fromScreen) -> bool {
+		unsigned long currentTime = millis();
+		
+		if (fromScreen == "success") {
+			return (currentTime - successScreenStartTime) >= SUCCESS_INTENDED_DISPLAY_TIME;
+		} else if (fromScreen == "X") {
+			return (currentTime - xScreenStartTime) >= X_INTENDED_DISPLAY_TIME;
+		}
+		
+		return false; // No auto-transition for other screens
 	};
 	
 	// Connection status display variables
@@ -100,6 +125,30 @@ void screenTask(void* parameter) {
 	while (true) {
 		bool processedMessage = false;
 		unsigned long currentTime = millis();
+		
+		// Handle auto-transitions for screens with intended display times
+		if (shouldAutoTransition(currentScreen)) {
+			if (currentScreen == "success") {
+				logger::write("[screen] Success screen auto-transition after 4.2s", "debug");
+				// Auto-transition after success screen - app task will handle cleanup
+				showEnterAmountScreen(0);
+			} else if (currentScreen == "X") {
+				logger::write("[screen] X screen auto-transition after 2.1s", "debug");
+				// Auto-transition after X screen
+				showEnterAmountScreen(0);
+			}
+		}
+		
+		// Handle early transition triggers (like pressing * to skip)
+		if (earlyTransitionRequested && canTransitionFromScreen(currentScreen)) {
+			earlyTransitionRequested = false;
+			logger::write("[screen] Early transition triggered for " + currentScreen, "debug");
+			
+			if (currentScreen == "success") {
+				// Handle early success screen transition - app task will handle cleanup
+				showEnterAmountScreen(0);
+			}
+		}
 		
 		// Check connection status regularly when showing payment QR code
 		if (currentScreen == "paymentQRCode" && 
@@ -167,8 +216,34 @@ void screenTask(void* parameter) {
 							default: newScreen = currentScreen; break;
 						}
 						
-						// Check if screen is different and if we can transition from current screen
+						// Validate screen transition logic to prevent invalid flows
+						bool isValidTransition = true;
 						if (currentScreen != newScreen) {
+							// CRITICAL: Prevent NFC screen from following NFC success or sand
+							if (newScreen == "NFC" && (currentScreen == "NFCsuccess" || currentScreen == "sand")) {
+								logger::write("[screen] BLOCKED invalid transition: " + currentScreen + " → " + newScreen + 
+								             " (NFC screen cannot follow NFC success or sand)", "warning");
+								isValidTransition = false;
+							}
+							
+							// CRITICAL: Ensure correct NFC flow
+							// NFC success should be followed by sand (not back to NFC)
+							// Sand should be followed by X or success (not back to NFC)
+							if (currentScreen == "NFCsuccess" && newScreen != "sand") {
+								logger::write("[screen] BLOCKED invalid transition: NFCsuccess → " + newScreen + 
+								             " (should transition to sand)", "warning");
+								isValidTransition = false;
+							}
+							
+							if (currentScreen == "sand" && newScreen != "X" && newScreen != "success") {
+								logger::write("[screen] BLOCKED invalid transition: sand → " + newScreen + 
+								             " (should transition to X or success)", "warning");
+								isValidTransition = false;
+							}
+						}
+						
+						// Check if screen is different and if we can transition from current screen
+						if (currentScreen != newScreen && isValidTransition) {
 							if (canTransitionFromScreen(currentScreen)) {
 								shouldProcess = true;
 							} else {
@@ -197,6 +272,7 @@ void screenTask(void* parameter) {
 								screen_tft::renderJPEG("/x.jpg", 0, 0, 1);
 								currentScreen = "X";
 								lastScreen = currentScreen;
+								xScreenStartTime = millis(); // Record start time for timing
 								break;
 								
 							case ScreenMessage::MessageType::NFC:
@@ -313,10 +389,14 @@ void screenTask(void* parameter) {
 		
 		// Then handle status updates if no other screen was processed
 		if (!processedMessage) {
-			// Check for queued status updates first
+			// Check for queued status updates and early transition triggers
 			if (uxQueueMessagesWaiting(screenQueue) > 0) {
 				if (xQueuePeek(screenQueue, &msg, 0) == pdTRUE) {
-					if (msg.type == ScreenMessage::MessageType::STATUS_SYMBOLS) {
+					if (msg.type == ScreenMessage::MessageType::EARLY_TRANSITION_TRIGGER) {
+						xQueueReceive(screenQueue, &msg, 0);
+						earlyTransitionRequested = true;
+						processedMessage = true;
+					} else if (msg.type == ScreenMessage::MessageType::STATUS_SYMBOLS) {
 						xQueueReceive(screenQueue, &msg, 0);
 						screen_tft::showStatusSymbols(msg.batteryPercent);
 					}
@@ -454,6 +534,11 @@ void showSensitivityInputScreen(const std::string &sensitivityInput) {
     strncpy(msg.text, sensitivityInput.c_str(), sizeof(msg.text) - 1);
     msg.text[sizeof(msg.text) - 1] = '\0';
     xQueueSend(screenQueue, &msg, portMAX_DELAY);
+}
+
+void triggerEarlyTransition() {
+    ScreenMessage msg(ScreenMessage::MessageType::EARLY_TRANSITION_TRIGGER);
+    xQueueSend(screenQueue, &msg, 0); // Don't block
 }
 
 }

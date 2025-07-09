@@ -37,11 +37,8 @@ std::string parseInvoice(const std::string &json);
 std::string requestInvoice(const std::string &url);
 std::string fetchPaymentHash(const std::string &lnurl);
 bool isPaymentMade(const std::string &paymentHash, const std::string &apiKey);
-bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &apiKey, const std::string &invoice);
 
-void onlinePaymentMonitorTask(void* pvParameters);
-bool startUnifiedPaymentFlow(const double &amount, const std::string &pin);
-bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &pin);
+// Legacy payment functions removed in v3.0.0 - now using unified payment flow
 
 // New functions for refactored payment flow
 PaymentState initializePaymentFlow(const double &amount, const std::string &pin, std::string &lnurlQR);

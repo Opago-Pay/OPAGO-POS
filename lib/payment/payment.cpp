@@ -226,354 +226,10 @@ bool isPaymentMade(const std::string &paymentHash, const std::string &apiKey) {
     return false;
 }
 
-// waitForPaymentOrCancel
-// This function waits for a payment to be made or cancelled. It checks various states and signals from the NFC task and the user.
-// The function uses two event groups (appEventGroup and nfcEventGroup) to wait for and handle various events.
-// The bits in the event groups represent the following states:
-// appEventGroup:
-// Bit 0 (1 << 0): Indicates that a card has been detected by nfcTask.
-// Bit 1 (1 << 1): Confirmation bit for the successful shutdown of the RF module and transition into idle mode in nfcTask.
-// nfcEventGroup:
-// Bit 0 (1 << 0): Instructs nfcTask to power up or remain active.
-// Bit 1 (1 << 1): Commands nfcTask to turn off the RF functionality and transition to idle mode. This bit is used particularly after a successful payment is processed.
-bool waitForPaymentOrCancel(const std::string &paymentHash, const std::string &apiKey, const std::string &invoice) {
-    paymentisMade = false;
-    bool keyPressed = false;
-    static unsigned long lastUpdate = 0;
-    lastRenderedQRCode = millis();
-    EventBits_t uxBits;
-    const EventBits_t uxAllBits = ( 1 << 0 ) | ( 1 << 1 );
-    bool lastConnectionState = onlineStatus;
-
-    // Only configure NFC if it's enabled
-    if (config::getBool("nfcEnabled")) {
-        logger::write("[payment] NFC is enabled, activating NFC task", "info");
-        
-        if (nfcTaskHandle == NULL) {
-            logger::write("[payment] ERROR: NFC task handle is NULL!", "error");
-        } else {
-            logger::write("[payment] NFC task handle is valid", "info");
-        }
-        
-        cap.setThresholds(5, 5);
-        logger::write("[payment] Activating NFC task for payment mode", "info");
-        logger::write("[payment] Clearing NFC shutdown bit and setting activation bit", "info");
-        
-        if (nfcEventGroup == NULL) {
-            logger::write("[payment] ERROR: NFC event group is NULL!", "error");
-        } else {
-            logger::write("[payment] NFC event group is valid", "info");
-            xEventGroupClearBits(nfcEventGroup, (1 << 1));
-            xEventGroupSetBits(nfcEventGroup, (1 << 0));
-            logger::write("[payment] NFC task activation signals sent", "info");
-        }
-    } else {
-        logger::write("[payment] NFC is disabled in config", "info");
-    }
-
-    while (!paymentisMade) {
-        // Check for connection state changes
-        if (lastConnectionState != onlineStatus) {
-            if (!onlineStatus) {
-                screen::showNowifi();
-            } else {
-                screen::showPaymentQRCodeScreen(invoice);
-            }
-            lastConnectionState = onlineStatus;
-        }
-
-        // Check for payment if we're online
-        if (onlineStatus) {
-            logger::write("[payment] Checking if paid.", "info");
-            paymentisMade = isPaymentMade(paymentHash, apiKey);
-        }
-
-        // Handle cancellation - parallel with NFC
-        if (config::getBool("nfcEnabled")) {
-            // Check for NFC payment completion (non-blocking)
-            uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(0));
-            
-            if ((uxBits & (1 << 0)) != 0) {
-                logger::write("[payment] NFC payment detected, checking if payment completed", "info");
-                // Clear the detection bit immediately
-                xEventGroupClearBits(appEventGroup, (1 << 0));
-                
-                // Give NFC task time to process before checking payment status
-                vTaskDelay(pdMS_TO_TICKS(2000)); // 2 seconds for processing
-                
-                // Check if payment was made via NFC
-                if (paymentisMade) {
-                    logger::write("[payment] Payment completed via NFC", "info");
-                    break; // Exit the payment waiting loop
-                }
-            }
-            
-            // Use debounced touch detection to avoid false triggers from NFC interference
-            keyPressed = getDebouncedLongTouch('*', 210);
-        } else {
-            keyPressed = (getTouch() == "*");
-        }
-
-        if (keyPressed) {
-            logger::write("[payment] Payment cancelled by user.", "info");
-            screen::showX();
-            
-            // Only handle NFC shutdown if NFC is enabled
-            if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
-                xEventGroupClearBits(nfcEventGroup, (1 << 0));
-                xEventGroupSetBits(nfcEventGroup, (1 << 1));
-                
-                // Wait for NFC shutdown confirmation
-                uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
-                if ((uxBits & (1 << 1)) != 0) {
-                    vTaskSuspend(nfcTaskHandle);
-                }
-            }
-            return false;
-        }
-
-        // Check for contrast adjustment
-        std::string contrastKey = getTouch(); 
-        if (contrastKey == "1") {
-            screen::adjustContrast(-10);
-        } else if (contrastKey == "4") {
-            screen::adjustContrast(10);
-        }
-
-        // Yield to prevent watchdog timer and allow NFC task on Core 0 to run
-        vTaskDelay(pdMS_TO_TICKS(50)); // Longer delay to ensure proper core switching
-    }
-
-    // Payment successful
-    if (paymentisMade) {
-        screen::showSuccess();
-        logger::write("[payment] Payment has been made.", "info");
-        
-        // Only handle NFC shutdown if NFC is enabled
-        if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
-            xEventGroupClearBits(nfcEventGroup, (1 << 0));
-            xEventGroupSetBits(nfcEventGroup, (1 << 1));
-            
-            uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
-            if ((uxBits & (1 << 1)) != 0) {
-                vTaskSuspend(nfcTaskHandle);
-            }
-        }
-    }
-
-    logger::write("[payment] Returning to App Loop", "debug");
-    if (config::getBool("nfcEnabled")) {
-        cap.setThresholds(3, 5); // Restore normal sensitivity
-    }
-    connectionLoss = false;
-    return paymentisMade;
-}
-
-bool waitForPaymentWithFallback(const std::string &lnurlQR, const std::string &pin) {
-    paymentisMade = false;
-    bool keyPressed = false;
-    lastRenderedQRCode = millis();
-    EventBits_t uxBits;
-    const EventBits_t uxAllBits = ( 1 << 0 ) | ( 1 << 1 );
-    bool lastConnectionState = onlineStatus;
-    unsigned long lastOnlineCheck = 0;
-    const unsigned long ONLINE_CHECK_INTERVAL = 2000; // Check every 2 seconds
-    
-    // Show the LNURL QR immediately (same for both online/offline)
-    screen::showPaymentQRCodeScreen(lnurlQR);
-    logger::write("[payment] Showing LNURL QR code", "info");
-
-    // Only configure NFC if it's enabled
-    if (config::getBool("nfcEnabled")) {
-        cap.setThresholds(5, 5);
-        vTaskResume(nfcTaskHandle);
-        xEventGroupClearBits(nfcEventGroup, (1 << 1));
-        xEventGroupSetBits(nfcEventGroup, (1 << 0));
-    }
-
-    while (!paymentisMade) {
-        // Check for connection state changes
-        if (lastConnectionState != onlineStatus) {
-            if (!onlineStatus) {
-                logger::write("[payment] Connection lost", "info");
-                screen::showNowifi();
-                vTaskDelay(pdMS_TO_TICKS(1000));
-                screen::showPaymentQRCodeScreen(lnurlQR);
-            } else {
-                logger::write("[payment] Connection restored", "info");
-                screen::showPaymentQRCodeScreen(lnurlQR);
-            }
-            lastConnectionState = onlineStatus;
-        }
-
-        // Check for payment if we're online
-        if (onlineStatus) {
-            unsigned long currentTime = millis();
-            if (currentTime - lastOnlineCheck >= ONLINE_CHECK_INTERVAL) {
-                logger::write("[payment] Checking if LNURL payment received", "info");
-                
-                // Check POS status API for payment
-                std::string posId = extractPosIdFromCallbackUrl();
-                std::string apiKey = config::getString("apiKey.key");
-                std::string returnedPin;
-                
-                if (!posId.empty()) {
-                    bool paymentReceived = checkPosPaymentStatus(posId, apiKey, pin, returnedPin);
-                    if (paymentReceived) {
-                        logger::write("[payment] Payment confirmed via POS status API", "info");
-                        if (!returnedPin.empty()) {
-                            logger::write("[payment] Using API PIN for verification: " + returnedPin, "info");
-                            // Update the global API PIN for verification
-                            extern std::string apiReturnedPin;
-                            apiReturnedPin = returnedPin;
-                        }
-                        paymentisMade = true;
-                    }
-                }
-                
-                lastOnlineCheck = currentTime;
-            }
-        }
-
-        // Handle cancellation and PIN entry
-        if (config::getBool("nfcEnabled")) {
-            uxBits = xEventGroupWaitBits(appEventGroup, uxAllBits, pdFALSE, pdFALSE, pdMS_TO_TICKS(210));
-            
-            if ((uxBits & (1 << 0)) != 0) {
-                logger::write("[payment] Card detected, checking payment", "info");
-                // Clear the card detection bit immediately to prevent flooding
-                xEventGroupClearBits(appEventGroup, (1 << 0));
-                // Give NFC task time to process the card (longer delay)
-                vTaskDelay(pdMS_TO_TICKS(5000)); // 5 seconds for card processing
-                continue;
-            }
-            
-            keyPressed = getLongTouch('*', 210);
-                         if (getTouch() == "#") {
-                 // Switch to PIN entry mode
-                 logger::write("[payment] Switching to PIN entry mode", "info");
-                 
-                 // Cleanup NFC if enabled
-                 if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
-                     xEventGroupClearBits(nfcEventGroup, (1 << 0));
-                     xEventGroupSetBits(nfcEventGroup, (1 << 1));
-                     uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
-                     if ((uxBits & (1 << 1)) != 0) {
-                         vTaskSuspend(nfcTaskHandle);
-                     }
-                 }
-                 
-                 // No task cleanup needed - using direct API calls
-                 
-                 // Transition to PIN screen
-                 screen::showPaymentPinScreen("");
-                 return false; // Return false to indicate we've handled the transition
-             }
-        } else {
-            keyPressed = (getTouch() == "*");
-                         if (getTouch() == "#") {
-                 // Switch to PIN entry mode
-                 logger::write("[payment] Switching to PIN entry mode", "info");
-                 
-                 // No task cleanup needed - using direct API calls
-                 
-                 // Transition to PIN screen
-                 screen::showPaymentPinScreen("");
-                 return false; // Return false to indicate we've handled the transition
-             }
-        }
-
-        if (keyPressed) {
-            logger::write("[payment] Payment cancelled by user", "info");
-            screen::showX();
-            
-            // Cleanup NFC if enabled
-            if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
-                xEventGroupClearBits(nfcEventGroup, (1 << 0));
-                xEventGroupSetBits(nfcEventGroup, (1 << 1));
-                uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
-                if ((uxBits & (1 << 1)) != 0) {
-                    vTaskSuspend(nfcTaskHandle);
-                }
-            }
-            
-            // No task cleanup needed - using direct API calls
-            
-            return false;
-        }
-
-        // Check for contrast adjustment
-        std::string contrastKey = getTouch(); 
-        if (contrastKey == "1") {
-            screen::adjustContrast(-10);
-        } else if (contrastKey == "4") {
-            screen::adjustContrast(10);
-        }
-
-        // Yield to prevent watchdog timer and allow NFC task on Core 0 to run
-        vTaskDelay(pdMS_TO_TICKS(50)); // Longer delay to ensure proper core switching
-    }
-
-    // Payment successful
-    if (paymentisMade) {
-        screen::showSuccess();
-        logger::write("[payment] Payment successful", "info");
-        
-        // Cleanup NFC if enabled
-        if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
-            xEventGroupClearBits(nfcEventGroup, (1 << 0));
-            xEventGroupSetBits(nfcEventGroup, (1 << 1));
-            uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(1000));
-            if ((uxBits & (1 << 1)) != 0) {
-                vTaskSuspend(nfcTaskHandle);
-            }
-        }
-        
-        // No task cleanup needed - using direct API calls
-    }
-
-    logger::write("[payment] Returning to App Loop", "debug");
-    if (config::getBool("nfcEnabled")) {
-        cap.setThresholds(3, 5); // Restore normal sensitivity
-    }
-    connectionLoss = false;
-    return paymentisMade;
-}
-
-// Task-based payment monitoring removed - using direct API calls instead
-
-bool startUnifiedPaymentFlow(const double &amount, const std::string &pin) {
-    logger::write("[payment] Starting unified payment flow v3.0.0", "info");
-    
-    // Always generate LNURL QR (same for both online/offline)
-    std::string signedUrl = util::createLnurlPay(amount, pin);
-    std::string lnurlQR = config::getString("uriSchemaPrefix") + 
-                         util::toUpperCase(util::lnurlEncode(signedUrl));
-    
-    // Set the global qrcodeData for compatibility
-    qrcodeData = lnurlQR;
-    
-    // Check if we're in demo mode
-    if (config::getString("callbackUrl") == "https://opago-pay.com/getstarted" || 
-        config::getString("apiKey.key") == "BueokH4o3FmhWmbvqyqLKz") {
-        logger::write("[payment] Demo mode detected", "info");
-        screen::showPaymentQRCodeScreen("https://opago-pay.com/getstarted");
-        return true; // Demo mode doesn't need payment processing
-    }
-    
-    // If we're in offline-only mode, skip online attempt
-    if (offlineMode || !onlineStatus) {
-        logger::write("[payment] Offline mode - showing LNURL QR only", "info");
-        screen::showPaymentQRCodeScreen(lnurlQR);
-        return waitForPaymentWithFallback(lnurlQR, pin);
-    }
-    
-    // Online mode - payment status will be checked directly in waitForPaymentWithFallback
-    logger::write("[payment] Online mode - will check POS status API directly", "info");
-    
-    // Wait for payment with fallback handling
-    return waitForPaymentWithFallback(lnurlQR, pin);
-}
+// LEGACY PAYMENT FUNCTIONS REMOVED IN v3.0.0  
+// All payment logic now unified in initializePaymentFlow() and checkPaymentStatus()
+// These functions handled online, offline, and NFC payments with duplicate logic and race conditions
+// The unified v3.0.0 flow eliminates complexity and improves reliability
 
 // New refactored payment flow functions
 PaymentState initializePaymentFlow(const double &amount, const std::string &pin, std::string &lnurlQR) {
@@ -632,8 +288,13 @@ PaymentState initializePaymentFlow(const double &amount, const std::string &pin,
     if (config::getBool("nfcEnabled")) {
         cap.setThresholds(5, 5);
         vTaskResume(nfcTaskHandle);
+        
+        // CRITICAL: Allow NFC task to resume and start waiting for signals
+        vTaskDelay(pdMS_TO_TICKS(100)); // Give NFC task time to enter its waiting loop
+        
         xEventGroupClearBits(nfcEventGroup, (1 << 1));
         xEventGroupSetBits(nfcEventGroup, (1 << 0));
+        logger::write("[payment] NFC task resumed and activation signals sent", "info");
     }
     
     // If we're in offline-only mode, just show QR
@@ -662,7 +323,7 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
     
     // Check if payment was already made
     if (paymentisMade) {
-        logger::write("[payment] IMMEDIATE SUCCESS: paymentisMade is already true - this may be the bug!", "warning");
+        logger::write("[payment] Payment already completed", "info");
         return PaymentState::PAYMENT_SUCCESS;
     }
     
@@ -816,6 +477,13 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
                     }
                     paymentisMade = true;
                     logger::write("[payment] Setting paymentisMade=true due to POS status API confirmation", "info");
+                    
+                    // CRITICAL: Signal NFC task if payment was made via POS status API
+                    if (config::getBool("nfcEnabled")) {
+                        logger::write("[payment] Setting LNURL_WITHDRAW_SUCCESS_BIT for NFC task after POS status API confirmation", "info");
+                        xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_SUCCESS_BIT);
+                    }
+                    
                     return PaymentState::PAYMENT_SUCCESS;
                 }
             } else {

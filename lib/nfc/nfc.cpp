@@ -120,7 +120,7 @@ bool activateNTAG424DNA(PN532_I2C* pn532_i2c, Adafruit_PN532* nfc) {
 // InAutoPoll implementation for NTAG424 detection with automatic RF power sweeping
 // Returns: 0 = no detection, 1 = card detected (show NFC screen), 2 = card detected + read successful  
 int startAutoPollingForNTAG424(PN532* pn532, Adafruit_PN532* nfc) {
-    logger::write("[nfcTask] Starting InAutoPoll for NTAG424 with automatic RF power sweeping", "info");
+            // Starting InAutoPoll for NTAG424 with automatic RF power sweeping
     
     // Configure target types for ISO14443A (NTAG424 compatible)
     uint8_t targetTypes[] = {PN532_MIFARE_ISO14443A}; // Type A targets (includes NTAG424)
@@ -402,7 +402,11 @@ void idleMode(PN532_I2C *pn532_i2c)
     // CRITICAL: Re-enable normal touch input when entering idle mode
     suppressTouchDuringNFC(false);
     setRFSafeMode(false); // Disable RF-safe mode - allow all keys
-    logger::write("[nfcTask] Touch input re-enabled in idleMode", "info");
+    logger::write("[nfcTask] Touch input re-enabled in idleMode - NFC processing complete", "info");
+    
+    // Reset processing state for next payment session - this is done in idleMode to ensure
+    // no re-detection can occur during success screen display
+    // Note: isProcessingCard is a local variable in nfcTask, so we'll handle this differently
     
     while (!isRfOff) 
     {
@@ -721,8 +725,11 @@ void nfcTask(void *args)
                                 suppressTouchDuringNFC(false);
                                 setRFSafeMode(false); // Disable RF-safe mode - payment complete
                                 logger::write("[nfcTask] Touch input re-enabled after successful withdraw", "info");
-                                isProcessingCard = false; // Reset processing flag
-                                idleMode(pn532_i2c); // Enter idle mode
+                                
+                                // CRITICAL: Do NOT reset isProcessingCard here - let it stay true until completely done
+                                // This prevents any chance of re-detection during success screen display
+                                logger::write("[nfcTask] Keeping card processing flag true during success screen", "info");
+                                idleMode(pn532_i2c); // Enter idle mode - this will reset processing state
                                 
                                 // CRITICAL: Only set paymentisMade if we're still in the same payment session
                                 // This prevents delayed results from previous sessions affecting new payments

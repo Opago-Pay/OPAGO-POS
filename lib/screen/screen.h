@@ -34,7 +34,8 @@ struct ScreenMessage {
         WAKEUP,
         ADJUST_CONTRAST,
         CONTRAST_INPUT,
-        SENSITIVITY_INPUT
+        SENSITIVITY_INPUT,
+        EARLY_TRANSITION_TRIGGER  // For triggering early transitions (like * to skip)
     };
     
     MessageType type;
@@ -82,6 +83,9 @@ void sleep();
 void wakeup();
 void showContrastInputScreen(const std::string &contrastInput);
 void showSensitivityInputScreen(const std::string &sensitivityInput);
+
+// Function to trigger early screen transitions (like pressing * to skip)
+void triggerEarlyTransition();
 
 // New screen task function
 void screenTask(void* parameter);

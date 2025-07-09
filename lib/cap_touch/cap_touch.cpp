@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "config.h"
+#include "Adafruit_MPR121.h"
 
 // Global variables for key state
 static char lastPressedKey = 0;
@@ -14,6 +15,15 @@ static SemaphoreHandle_t keyStateMutex = NULL;
 static bool touchSuppressed = false;  // Flag to suppress touch during NFC operations
 static bool rfSafeMode = false;      // Flag for RF-safe mode allowing only * and # with enhanced debouncing
 static bool pinEntryMode = false;    // Flag for ultra-responsive PIN entry mode
+
+// Rolling window data for stochastic analysis in RF-safe mode
+static RollingWindowData rollingWindow;
+static char rfSafeDetectedKey = 0;  // Result from rolling window analysis
+
+// Non-blocking long press detection variables
+static char longPressStartKey = 0;    // Key that started potential long press
+static unsigned long longPressStartTime = 0;  // Time when potential long press started
+static const unsigned long LONG_PRESS_DURATION = 300;  // 300ms for long press threshold
 
 void updateSensitivity(int sensitivityPercent) {
     // Convert sensitivity (1-100) to cap sensitivity (20-1)
@@ -43,36 +53,156 @@ void capTouchTask(void* parameter) {
         uint16_t currtouched = cap.touched();
         unsigned long currentTime = millis();
         
-        // Only process if enough time has passed since last press
-        if (currentTime - lastPressTime >= currentDebounceDelay) {
+        // Log cap touch sampling when RF-safe mode is active or any touch detected
+        if (currtouched > 0) {
+            char detectedKeys[13] = {0}; // For up to 12 keys + null terminator
+            int keyCount = 0;
             for (int i = 0; i < 12; i++) {
                 if (currtouched & _BV(i)) {
-                    // Take mutex before updating shared variables
-                    if (xSemaphoreTake(keyStateMutex, portMAX_DELAY) == pdTRUE) {
-                        lastPressedKey = button_values[i];
-                        lastPressTime = currentTime;
-                        isLongPress = false;
-                        xSemaphoreGive(keyStateMutex);
-                    }
-                    
-                    // Check for long press
-                    int consistentReadings = 0;
-                    for (int j = 0; j < 20; j++) {  // Check for 200ms
-                        if (cap.touched() & _BV(i)) {
-                            consistentReadings++;
-                        }
-                        vTaskDelay(pdMS_TO_TICKS(10));
-                    }
-                    
-                    // If it was a long press, update the state
-                    if (consistentReadings >= 18) {  // 90% consistency for long press
-                        if (xSemaphoreTake(keyStateMutex, portMAX_DELAY) == pdTRUE) {
-                            isLongPress = true;
-                            xSemaphoreGive(keyStateMutex);
-                        }
-                    }
-                    break;  // Only process one button at a time
+                    detectedKeys[keyCount++] = button_values[i];
                 }
+            }
+            if (keyCount > 0) {
+                if (rfSafeMode) {
+                    logger::write("[cap_touch] RF-safe sampling detected: " + std::string(detectedKeys) + 
+                                  " (raw: 0x" + String(currtouched, HEX).c_str() + ")", "info");
+                } else {
+                    logger::write("[cap_touch] Normal sampling detected: " + std::string(detectedKeys) + 
+                                  " (raw: 0x" + String(currtouched, HEX).c_str() + ")", "debug");
+                }
+            }
+        }
+        
+                        for (int i = 0; i < 12; i++) {
+            if (currtouched & _BV(i)) {
+                char detectedKey = button_values[i];
+                
+                // Take mutex before updating shared variables
+                if (xSemaphoreTake(keyStateMutex, portMAX_DELAY) == pdTRUE) {
+                    if (rfSafeMode) {
+                        // RF-safe mode: only process * and # with rolling window analysis
+                        // NO DEBOUNCE - let rolling window accumulate samples continuously
+                        if (detectedKey == '*' || detectedKey == '#') {
+                            // Add sample to rolling window
+                            rollingWindow.addSample(detectedKey, currentTime);
+                            
+                            // Analyze rolling window for decision
+                            float keyProbability = rollingWindow.getKeyProbability(detectedKey, currentTime);
+                            
+                            // Get sample count for the target key in current window
+                            int validSamples = 0;
+                            int targetKeyCount = 0;
+                            const unsigned long WINDOW_DURATION_MS = 300;
+                            
+                            for (int j = 0; j < (rollingWindow.windowFull ? RollingWindowData::WINDOW_SIZE : rollingWindow.currentIndex); j++) {
+                                if (currentTime - rollingWindow.timeHistory[j] <= WINDOW_DURATION_MS) {
+                                    validSamples++;
+                                    if (rollingWindow.keyHistory[j] == detectedKey) {
+                                        targetKeyCount++;
+                                    }
+                                }
+                            }
+                            
+                            // Thresholds for decision making
+                            const float INTENDED_PRESS_THRESHOLD = 0.15f;
+                            const float STRONG_INTENTION_THRESHOLD = 0.60f;
+                            const int MIN_SAMPLES_REQUIRED = 3;
+                            
+                            // Decision logic - RF-safe validation replaces debounce logic
+                            if (validSamples >= MIN_SAMPLES_REQUIRED) {
+                                if (keyProbability >= INTENDED_PRESS_THRESHOLD) {
+                                    // Apply minimal debounce (50ms) only to prevent double-triggering
+                                    if (currentTime - lastPressTime >= 50) {
+                                        // Key press detected with sufficient confidence
+                                        rfSafeDetectedKey = detectedKey;
+                                        lastPressedKey = detectedKey;
+                                        lastPressTime = currentTime;
+                                        isLongPress = true; // RF-safe validation = intentional press
+                                    
+                                                                            // Clear the rolling window to prevent repeated detection
+                                        rollingWindow.currentIndex = 0;
+                                        rollingWindow.windowFull = false;
+                                        
+                                        if (keyProbability >= STRONG_INTENTION_THRESHOLD) {
+                                            logger::write("[cap_touch] RF-safe STRONG intention: '" + std::string(1, detectedKey) + 
+                                                          "' (prob: " + std::to_string(keyProbability * 100) + 
+                                                          "%, samples: " + std::to_string(validSamples) + 
+                                                          "/" + std::to_string(targetKeyCount) + ")", "info");
+                                        } else {
+                                            logger::write("[cap_touch] RF-safe key detected: '" + std::string(1, detectedKey) + 
+                                                          "' (prob: " + std::to_string(keyProbability * 100) + 
+                                                          "%, samples: " + std::to_string(validSamples) + 
+                                                          "/" + std::to_string(targetKeyCount) + ")", "info");
+                                        }
+                                    } else {
+                                        // Within debounce window - reject to prevent double-triggering
+                                        logger::write("[cap_touch] RF-safe valid but within 50ms debounce window", "debug");
+                                    }
+                                } else {
+                                    // Low confidence - likely RF interference
+                                    logger::write("[cap_touch] RF interference rejected: '" + std::string(1, detectedKey) + 
+                                                  "' (prob: " + std::to_string(keyProbability * 100) + 
+                                                  "%, samples: " + std::to_string(validSamples) + 
+                                                  "/" + std::to_string(targetKeyCount) + ")", "info");
+                                }
+                            } else if (validSamples < MIN_SAMPLES_REQUIRED) {
+                                // Not enough samples yet - continue accumulating
+                                logger::write("[cap_touch] RF-safe accumulating: '" + std::string(1, detectedKey) + 
+                                              "' (samples: " + std::to_string(validSamples) + 
+                                              "/" + std::to_string(MIN_SAMPLES_REQUIRED) + 
+                                              ", prob: " + std::to_string(keyProbability * 100) + "%)", "debug");
+                            }
+                        }
+                        // Ignore non-* and non-# keys in RF-safe mode
+                    } else {
+                        // Normal mode - apply traditional debounce with non-blocking long press detection
+                        if (currentTime - lastPressTime >= currentDebounceDelay) {
+                            lastPressedKey = detectedKey;
+                            lastPressTime = currentTime;
+                            isLongPress = false;
+                            
+                            // Start non-blocking long press timer for this key
+                            longPressStartKey = detectedKey;
+                            longPressStartTime = currentTime;
+                        }
+                    }
+                    xSemaphoreGive(keyStateMutex);
+                }
+                break;  // Only process one button at a time
+            }
+        }
+        
+        // Non-blocking long press detection (only in normal mode)
+        if (!rfSafeMode && longPressStartKey != 0) {
+            if (xSemaphoreTake(keyStateMutex, portMAX_DELAY) == pdTRUE) {
+                // Check if the same key is still being pressed after LONG_PRESS_DURATION
+                if (currentTime - longPressStartTime >= LONG_PRESS_DURATION) {
+                    // Check if the key is still being pressed
+                    uint16_t currentTouched = cap.touched();
+                    bool keyStillPressed = false;
+                    
+                    // Find the button index for the longPressStartKey
+                    for (int i = 0; i < 12; i++) {
+                        if (button_values[i] == longPressStartKey && (currentTouched & _BV(i))) {
+                            keyStillPressed = true;
+                            break;
+                        }
+                    }
+                    
+                    if (keyStillPressed && lastPressedKey == longPressStartKey) {
+                        // Convert to long press
+                        isLongPress = true;
+                    }
+                    
+                    // Clear long press detection state
+                    longPressStartKey = 0;
+                    longPressStartTime = 0;
+                } else if (lastPressedKey != longPressStartKey) {
+                    // Different key was pressed, clear long press detection
+                    longPressStartKey = 0;
+                    longPressStartTime = 0;
+                }
+                xSemaphoreGive(keyStateMutex);
             }
         }
         
@@ -89,44 +219,47 @@ std::string getTouch() {
             return result;
         }
         
+        // Log current mode status only in RF-safe mode
         if (rfSafeMode) {
-            // RF-safe mode: only allow * and # with enhanced debouncing
-            if (lastPressedKey != 0 && !isLongPress && (lastPressedKey == '*' || lastPressedKey == '#')) {
-                // Enhanced debouncing for RF interference - require key to be stable
-                static unsigned long lastRfSafeCheck = 0;
-                static char lastRfSafeKey = 0;
-                static int consecutiveReadings = 0;
-                const int REQUIRED_CONSECUTIVE_RF = 2; // Reduced from 3 to 2 for better responsiveness
-                const int RF_SAFE_DEBOUNCE_DELAY = 100; // Reduced from 150ms to 100ms for quicker response
-                
-                unsigned long currentTime = millis();
-                
-                if (lastPressedKey == lastRfSafeKey) {
-                    consecutiveReadings++;
-                } else {
-                    consecutiveReadings = 1;
-                    lastRfSafeKey = lastPressedKey;
-                }
-                
-                if (consecutiveReadings >= REQUIRED_CONSECUTIVE_RF && 
-                    (currentTime - lastRfSafeCheck) >= RF_SAFE_DEBOUNCE_DELAY) {
-                    result = std::string(1, lastPressedKey);
-                    lastPressedKey = 0;  // Clear the key after reading
-                    lastRfSafeCheck = currentTime;
-                    consecutiveReadings = 0;
-                    lastRfSafeKey = 0;
-                } else {
-                    // Don't clear the key yet - let it accumulate readings
-                }
-            } else {
-                // Clear non-allowed keys in RF-safe mode
-                lastPressedKey = 0;
+            static unsigned long lastModeLog = 0;
+            if (millis() - lastModeLog > 3000) { // Log every 3 seconds for better debugging
+                logger::write("[cap_touch] Current mode - RF-safe: " + std::string(rfSafeMode ? "true" : "false") + 
+                              ", suppressed: " + std::string(touchSuppressed ? "true" : "false") + 
+                              ", lastKey: " + std::string(1, lastPressedKey ? lastPressedKey : '0'), "info");
+                lastModeLog = millis();
             }
-        } else {
-            // Normal mode - all keys work
-            if (lastPressedKey != 0 && !isLongPress) {
+        }
+        
+        // Enhanced key reading with mode-specific logic
+        if (lastPressedKey != 0) {
+            bool shouldReturn = false;
+            
+            if (rfSafeMode) {
+                // RF-safe mode: only return validated keys (treated as long presses)
+                shouldReturn = isLongPress;
+            } else {
+                // Normal mode and PIN entry mode: return regular presses, not long presses
+                // PIN entry gets responsiveness from CPU priority boost, not different logic
+                shouldReturn = !isLongPress;
+            }
+            
+            if (shouldReturn) {
                 result = std::string(1, lastPressedKey);
+                
+                // Log only in RF-safe mode for reduced noise
+                if (rfSafeMode) {
+                    logger::write("[cap_touch] RF-safe key delivered to app: '" + result + 
+                                  "' (validated via rolling window)", "info");
+                }
+                
                 lastPressedKey = 0;  // Clear the key after reading
+                isLongPress = false; // Reset long press state
+            }
+        } else if (rfSafeMode) {
+            static unsigned long lastNoKeyLog = 0;
+            if (millis() - lastNoKeyLog > 2000) { // Log every 2 seconds
+                logger::write("[cap_touch] RF-safe mode active - no validated key available", "debug");
+                lastNoKeyLog = millis();
             }
         }
         xSemaphoreGive(keyStateMutex);
@@ -222,6 +355,14 @@ void setRFSafeMode(bool enable) {
             // Clear any pending touches when entering RF-safe mode
             lastPressedKey = 0;
             isLongPress = false;
+            rfSafeDetectedKey = 0;
+            
+            // Reset rolling window for clean state
+            rollingWindow.currentIndex = 0;
+            rollingWindow.windowFull = false;
+            logger::write("[cap_touch] RF-safe mode enabled with rolling stochastic window analysis", "info");
+        } else {
+            logger::write("[cap_touch] RF-safe mode disabled", "info");
         }
         xSemaphoreGive(keyStateMutex);
     }

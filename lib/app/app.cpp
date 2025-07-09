@@ -19,6 +19,10 @@ std::string currentPaymentPin = "";
 std::string apiReturnedPin = "";  // PIN returned from API for verification
 bool isInPaymentFlow = false;
 
+// Screen transition flag to prevent double-processing of keys during transitions
+bool isTransitioningScreens = false;
+unsigned long transitionStartTime = 0;
+
 void appendToKeyBuffer(const std::string &key) {
 	unsigned long currentTime = millis();
 	if (currentTime - lastKeyAddedTime >= KEY_ADD_DELAY) {
@@ -94,9 +98,9 @@ void handlePaymentFlow() {
             case PaymentState::PAYMENT_SUCCESS:
                 logger::write("[app] Payment successful", "info");
                 screen::showSuccess();
-                cleanupPaymentFlow();
-                isInPaymentFlow = false;
-                // Will be handled in main loop to return to amount entry
+                // NOTE: Do NOT cleanup payment flow here - let the success screen transition handle it
+                // This prevents race condition where cleanup happens before screen transition completes
+                // Cleanup will be handled in main loop when success -> enterAmount transition is detected
                 break;
                 
             case PaymentState::SHOWING_QR:
@@ -136,6 +140,7 @@ void appTask(void* pvParameters) {
     Serial.println("App task started");
     static unsigned long lastPopTime = 0;
     static int popCount = 0;
+    static std::string lastScreenState = "";
     int signal;
     
     while(1) {
@@ -154,10 +159,7 @@ void appTask(void* pvParameters) {
             // - Skip handlePaymentFlow() - not relevant during PIN entry
             
             // Process PIN entry input immediately
-            std::string keyPressed = getTouch();
-            if (!keyPressed.empty()) {
-                // PIN entry key processing is handled below in the main switch
-            }
+            // Note: getTouch() result will be used in the main keyPressed processing below
             
             // Ultra-fast yielding for maximum responsiveness
             vTaskDelay(pdMS_TO_TICKS(1)); // Minimal 1ms delay for ultra-responsiveness
@@ -179,17 +181,9 @@ void appTask(void* pvParameters) {
             }
         }
         
-        // Handle successful payment completion
-        if (currentScreen == "success" && !isInPaymentFlow) {
-            TickType_t startTime = xTaskGetTickCount();
-            bool skipWait = false;
-            while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200) && !skipWait) {
-                if (getTouch() == "*") {
-                    skipWait = true;
-                }
-                vTaskDelay(pdMS_TO_TICKS(50));
-            }
-            
+                    // Handle screen transitions and cleanup
+        if (lastScreenState == "success" && currentScreen == "enterAmount") {
+            logger::write("[app] Success screen transitioned to enterAmount - handling cleanup", "debug");
             // CRITICAL: Ensure RF is turned off before returning to amount entry
             logger::write("[app] Payment success - ensuring RF is turned off before returning to amount entry", "info");
             if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
@@ -227,14 +221,49 @@ void appTask(void* pvParameters) {
                 logger::write("[app] RF confirmed off - safe to return to amount entry", "info");
             }
             
-            keysBuffer = "";  // Reset buffer
-            amount = 0;       // Reset amount
-            screen::showEnterAmountScreen(0);
+            // Cleanup payment flow if we were in one
+            if (isInPaymentFlow) {
+                cleanupPaymentFlow();
+                isInPaymentFlow = false;
+                keysBuffer = "";  // Reset buffer
+                amount = 0;       // Reset amount
+            }
         }
-        const std::string keyPressed = keypad::getPressedKey();
+        
+        // Handle successful payment completion - screen task now handles timing
+        if (currentScreen == "success" && !isInPaymentFlow) {
+            // Check for skip input and trigger early transition if * is pressed
+            if (getTouch() == "*") {
+                logger::write("[app] Skip requested for success screen", "debug");
+                screen::triggerEarlyTransition();
+            }
+            // Note: Auto-transition after 4.2 seconds is now handled by screen task
+        }
+        
+        // Handle X screen transitions
+        if (lastScreenState == "X" && currentScreen == "enterAmount") {
+            logger::write("[app] X screen transitioned to enterAmount - checking cleanup", "debug");
+            // Cleanup payment flow if we were in one (fallback safety net)
+            if (isInPaymentFlow) {
+                logger::write("[app] Fallback cleanup: Payment flow still active after X screen", "warning");
+                cleanupPaymentFlow();
+                isInPaymentFlow = false;
+                keysBuffer = "";  // Reset buffer
+                amount = 0;       // Reset amount
+            }
+            // Note: RF shutdown should already be handled by immediate cleanup when * was pressed
+        }
+        // Use cap touch system for all key input (includes RF-safe mode validation)
+        const std::string keyPressed = getTouch();
         if (keyPressed != "") {
-            logger::write("Key pressed: " + keyPressed, "debug");
+            logger::write("[app] Key received from cap touch: '" + keyPressed + "' on screen: " + currentScreen, "info");
             lastActivityTime = millis();
+            
+            // CRITICAL: Skip key processing if we're transitioning between screens
+            if (isTransitioningScreens) {
+                logger::write("[app] Skipping key processing during screen transition", "debug");
+                continue;
+            }
         }
         if (currentScreen == "home") {
             if (keyPressed == "") {
@@ -377,6 +406,11 @@ void appTask(void* pvParameters) {
                     setPinEntryMode(true);
                     
                     screen::showPaymentPinScreen(pinBuffer);
+                    
+                    // CRITICAL: Extended delay to let screen task process the PIN screen message
+                    // This prevents timing gaps where button presses are processed with old screen logic
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    
                     logger::write("[app] PIN entry screen displayed with optimized responsiveness", "info");
                     // Payment flow stays active - we can return to it
                 } else {
@@ -395,18 +429,48 @@ void appTask(void* pvParameters) {
                     suppressTouchDuringNFC(false);
                     logger::write("[app] RF-safe mode disabled and touch fully restored for cancellation", "info");
                     
+                    // CRITICAL: Ensure RF is turned off before cleanup
+                    if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
+                        logger::write("[app] Initiating RF shutdown sequence for payment cancellation", "info");
+                        
+                        bool rfShutdownSuccess = false;
+                        unsigned long shutdownStartTime = millis();
+                        const unsigned long SHUTDOWN_TIMEOUT_MS = 5000; // 5 seconds timeout
+                        
+                        while (!rfShutdownSuccess && (millis() - shutdownStartTime) < SHUTDOWN_TIMEOUT_MS) {
+                            // Send shutdown signals
+                            xEventGroupClearBits(nfcEventGroup, (1 << 0));
+                            xEventGroupSetBits(nfcEventGroup, (1 << 1));
+                            
+                            // Wait for confirmation with shorter timeout for retry
+                            EventBits_t uxBits = xEventGroupWaitBits(appEventGroup, (1 << 1), pdFALSE, pdFALSE, pdMS_TO_TICKS(500));
+                            if ((uxBits & (1 << 1)) != 0) {
+                                logger::write("[app] RF shutdown confirmed for payment cancellation", "info");
+                                vTaskSuspend(nfcTaskHandle);
+                                rfShutdownSuccess = true;
+                            } else {
+                                logger::write("[app] RF shutdown attempt failed, retrying...", "warning");
+                                vTaskDelay(pdMS_TO_TICKS(100)); // Brief delay before retry
+                            }
+                        }
+                        
+                        if (!rfShutdownSuccess) {
+                            logger::write("[app] CRITICAL: RF shutdown failed after 5 seconds for payment cancellation", "error");
+                        }
+                    }
+                    
                     cleanupPaymentFlow();
                     isInPaymentFlow = false;
+                    keysBuffer = "";  // Clear amount buffer immediately
+                    amount = 0;       // Reset amount immediately
                     screen::showX();
-                    vTaskDelay(pdMS_TO_TICKS(2100));
-                    keysBuffer = "";  // Reset buffer
-                    amount = 0;       // Reset amount
-                    screen::showEnterAmountScreen(0);
+                    // Note: X screen timing (2.1s) is now handled by screen task
                 } else {
-                    // Legacy behavior
+                    // Legacy behavior - clear buffer for clean state
+                    keysBuffer = "";  // Clear amount buffer immediately
+                    amount = 0;       // Reset amount immediately
                     screen::showX();
-                    vTaskDelay(pdMS_TO_TICKS(2100));
-                    screen::showHomeScreen();
+                    // Note: X screen timing (2.1s) is now handled by screen task
                 }
             } else if (keyPressed == "1") {
                 screen::adjustContrast(-10);// decrease contrast
@@ -414,14 +478,19 @@ void appTask(void* pvParameters) {
                 screen::adjustContrast(10);// increase contrast
             }
         } else if (currentScreen == "paymentPin") {
-            if (keyPressed == "#") {
+                        if (keyPressed == "#") {
                 // # key: Return to payment QR code screen (keep payment flow active if it exists)
+                logger::write("[app] # pressed on PIN screen - returning to QR code", "info");
+                
+                // CRITICAL: Set transition flag to prevent double-processing
+                isTransitioningScreens = true;
+                transitionStartTime = millis();
                 
                 // Disable PIN entry mode
                 setPinEntryMode(false);
                 
                 if (isInPaymentFlow) {
-                    logger::write("[app] Returning to payment QR from PIN entry - restarting NFC if needed", "info");
+                    logger::write("[app] In payment flow - showing currentPaymentLNURL: " + currentPaymentLNURL, "info");
                     
                     // CRITICAL: Restart NFC task since we shut it down for PIN entry
                     if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
@@ -448,8 +517,17 @@ void appTask(void* pvParameters) {
                     
                     screen::showPaymentQRCodeScreen(currentPaymentLNURL);
                 } else {
+                    logger::write("[app] Not in payment flow - showing legacy qrcodeData: " + qrcodeData, "info");
                     screen::showPaymentQRCodeScreen(qrcodeData);
                 }
+                
+                // CRITICAL: Extended delay to ensure screen transition completes
+                vTaskDelay(pdMS_TO_TICKS(200));
+                
+                // CRITICAL: Clear transition flag after screen change is complete
+                isTransitioningScreens = false;
+                
+                logger::write("[app] Screen transition complete - key processing re-enabled", "debug");
             } else if (keyPressed == "*") {
                 // * key: Delete last digit from PIN buffer, or return to QR if buffer is empty
                 if (!pinBuffer.empty()) {
@@ -459,12 +537,17 @@ void appTask(void* pvParameters) {
                     logger::write("[app] PIN digit deleted: " + std::to_string(pinBuffer.length()) + "/4 digits", "debug");
                 } else {
                     // PIN buffer is empty - return to payment QR code screen
+                    logger::write("[app] * pressed on empty PIN buffer - returning to QR code", "info");
+                    
+                    // CRITICAL: Set transition flag to prevent double-processing
+                    isTransitioningScreens = true;
+                    transitionStartTime = millis();
                     
                     // Disable PIN entry mode
                     setPinEntryMode(false);
                     
                     if (isInPaymentFlow) {
-                        logger::write("[app] Returning to payment QR from empty PIN entry - restarting NFC if needed", "info");
+                        logger::write("[app] In payment flow - showing currentPaymentLNURL: " + currentPaymentLNURL, "info");
                         
                         // CRITICAL: Restart NFC task since we shut it down for PIN entry
                         if (config::getBool("nfcEnabled") && nfcTaskHandle != NULL) {
@@ -491,8 +574,17 @@ void appTask(void* pvParameters) {
                         
                         screen::showPaymentQRCodeScreen(currentPaymentLNURL);
                     } else {
+                        logger::write("[app] Not in payment flow - showing legacy qrcodeData: " + qrcodeData, "info");
                         screen::showPaymentQRCodeScreen(qrcodeData);
                     }
+                    
+                    // CRITICAL: Extended delay to ensure screen transition completes
+                    vTaskDelay(pdMS_TO_TICKS(200));
+                    
+                    // CRITICAL: Clear transition flag after screen change is complete
+                    isTransitioningScreens = false;
+                    
+                    logger::write("[app] Screen transition complete - key processing re-enabled", "debug");
                 }
             } else if (keyPressed == "0" || keyPressed == "1" || keyPressed == "2" || keyPressed == "3" || keyPressed == "4" || keyPressed == "5" || keyPressed == "6" || keyPressed == "7" || keyPressed == "8" || keyPressed == "9") {
                 unsigned long currentTime = millis();
@@ -508,45 +600,44 @@ void appTask(void* pvParameters) {
                             
                             screen::showSuccess();
                             pinBuffer = "";
-                            TickType_t startTime = xTaskGetTickCount();
-                            while ((xTaskGetTickCount() - startTime) < pdMS_TO_TICKS(4200)) {
-                                if (getTouch() == "*") {
-                                    break;
-                                }
-                                vTaskDelay(pdMS_TO_TICKS(50)); // Check for input every 50ms
-                            }
-                            // Reset payment flow if we were in one
-                            if (isInPaymentFlow) {
-                                cleanupPaymentFlow();
-                                isInPaymentFlow = false;
-                                keysBuffer = "";  // Reset buffer
-                                amount = 0;       // Reset amount
-                                screen::showEnterAmountScreen(0);
-                            } else {
-                                screen::showHomeScreen();
-                            }
+                            // Note: Success screen timing (4.2s intended, 2.1s min) is now handled by screen task
+                            // The screen task will automatically transition or handle early transitions via triggerEarlyTransition()
                         } else {
+                            incorrectPinAttempts++;
                             screen::showX();
                             pinBuffer = "";
-                            vTaskDelay(pdMS_TO_TICKS(2100));
-                            if (++incorrectPinAttempts >= 5) {
-                                // Disable PIN entry mode - too many failed attempts
+                            
+                            if (incorrectPinAttempts >= 5) {
+                                // 5 failed attempts - show long X (4200ms, abortable after 1200ms) then reset
+                                logger::write("[app] 5 PIN attempts failed - showing long X and resetting payment", "info");
                                 setPinEntryMode(false);
-                                
-                                pinBuffer = "";
                                 incorrectPinAttempts = 0;
-                                vTaskDelay(pdMS_TO_TICKS(2100));
-                                // Reset payment flow if we were in one
+                                
+                                // Show long X manually (4200ms)
+                                vTaskDelay(pdMS_TO_TICKS(4200));
+                                
+                                // Reset payment flow completely
                                 if (isInPaymentFlow) {
-                                    keysBuffer = "";  // Reset buffer
-                                    amount = 0;       // Reset amount
-                                    screen::showEnterAmountScreen(0);
-                                } else {
-                                    screen::showHomeScreen();
+                                    cleanupPaymentFlow();
+                                    isInPaymentFlow = false;
+                                    keysBuffer = "";
+                                    amount = 0;
                                 }
+                                
+                                screen::showEnterAmountScreen(0);
+                                logger::write("[app] Payment reset to amount entry after 5 failed PIN attempts", "info");
                             } else {
-                                vTaskDelay(pdMS_TO_TICKS(420));
+                                // 1-4 failed attempts - show X (2100ms) then return to PIN entry
+                                logger::write("[app] Incorrect PIN attempt " + std::to_string(incorrectPinAttempts) + "/5", "info");
+                                
+                                // Show X for 2100ms manually
+                                vTaskDelay(pdMS_TO_TICKS(2100));
                                 screen::showPaymentPinScreen(pinBuffer);
+                                
+                                // CRITICAL: Extended delay to let screen task process the PIN screen message
+                                vTaskDelay(pdMS_TO_TICKS(200));
+                                
+                                logger::write("[app] Returned to PIN entry after incorrect attempt", "info");
                             }
                         }
                     }
@@ -560,12 +651,30 @@ void appTask(void* pvParameters) {
         } else if (currentScreen == "menu") {
             if (keyPressed == "1") {
                 bool nfcEnabled = config::getBool("nfcEnabled");
-                config::saveConfiguration("nfcEnabled", nfcEnabled ? "false" : "true");
+                if (nfcEnabled) {
+                    // Turning NFC off
+                    config::saveConfiguration("nfcEnabled", "false");
+                    logger::write("[app] NFC disabled via menu", "info");
+                } else {
+                    // Turning NFC on - must disable offline mode
+                    config::saveConfiguration("nfcEnabled", "true");
+                    config::saveConfiguration("offlineMode", "false");
+                    logger::write("[app] NFC enabled via menu - offline mode automatically disabled", "info");
+                }
                 vTaskDelay(pdMS_TO_TICKS(210));
                 esp_restart();  
             } else if (keyPressed == "2") {
                 bool currentOfflineMode = config::getBool("offlineMode");
-                config::saveConfiguration("offlineMode", currentOfflineMode ? "false" : "true");
+                if (currentOfflineMode) {
+                    // Turning offline mode off
+                    config::saveConfiguration("offlineMode", "false");
+                    logger::write("[app] Offline mode disabled via menu", "info");
+                } else {
+                    // Turning offline mode on - must disable NFC
+                    config::saveConfiguration("offlineMode", "true");
+                    config::saveConfiguration("nfcEnabled", "false");
+                    logger::write("[app] Offline mode enabled via menu - NFC automatically disabled", "info");
+                }
                 vTaskDelay(pdMS_TO_TICKS(210));
                 esp_restart();  
             } else if (keyPressed == "3") {
@@ -590,7 +699,9 @@ void appTask(void* pvParameters) {
                 }
                 config::saveConfiguration("contrastLevel", std::to_string(contrast));
                 screen::showSuccess();
-                vTaskDelay(pdMS_TO_TICKS(2100));
+                // Note: Success screen will show for 2.1s min, 4.2s intended via screen task
+                // Brief delay to let user see success before restart
+                vTaskDelay(pdMS_TO_TICKS(1000));
                 esp_restart();  // Restart to apply new contrast setting
             } else if (keyPressed >= "0" && keyPressed <= "9" && pinBuffer.length() < 3) {
                 unsigned long currentTime = millis();
@@ -609,7 +720,9 @@ void appTask(void* pvParameters) {
                 if (sensitivity > 100) sensitivity = 100;
                 config::saveConfiguration("touchSensitivity", std::to_string(sensitivity));
                 screen::showSuccess();
-                vTaskDelay(pdMS_TO_TICKS(2100));
+                // Note: Success screen will show for 2.1s min, 4.2s intended via screen task
+                // Brief delay to let user see success before restart
+                vTaskDelay(pdMS_TO_TICKS(1000));
                 esp_restart();  // Reboot to apply new sensitivity setting
             } else if (keyPressed >= "0" && keyPressed <= "9" && pinBuffer.length() < 3) {
                 pinBuffer += keyPressed;
@@ -617,9 +730,21 @@ void appTask(void* pvParameters) {
             }
         }
         
-        // Normal yielding for non-PIN screens (PIN entry has its own optimized timing above)
+        // Update last screen state for transition detection
+        lastScreenState = currentScreen;
+        
+        // Reset transition flag after each loop cycle (safety net)
+        if (isTransitioningScreens && keyPressed == "") {
+            // Only reset if no key was pressed this cycle and timeout exceeded
+            if (millis() - transitionStartTime > 500) { // Safety timeout
+                isTransitioningScreens = false;
+                logger::write("[app] Transition flag reset by safety timeout", "debug");
+            }
+        }
+        
+        // Consistent fast timing for all screens to ensure responsive touch detection
         if (currentScreen != "paymentPin") {
-            taskYIELD(); // Normal yielding for other screens
+            vTaskDelay(pdMS_TO_TICKS(10)); // 10ms delay for consistent touch responsiveness
         }
     } 
 } 
