@@ -253,6 +253,18 @@ void appTask(void* pvParameters) {
             }
             // Note: RF shutdown should already be handled by immediate cleanup when * was pressed
         }
+        
+        // CRITICAL: Ensure RF-safe mode is always disabled when returning to amount entry
+        // This prevents race conditions where RF-safe mode might remain enabled
+        if (currentScreen == "enterAmount" && lastScreenState != "enterAmount") {
+            logger::write("[app] Transitioning to amount entry - ensuring RF-safe mode is disabled", "debug");
+            extern void setRFSafeMode(bool enable);
+            setRFSafeMode(false);
+            suppressTouchDuringNFC(false);
+            // Restore normal touch sensitivity for amount entry
+            cap.setThresholds(3, 5);
+            logger::write("[app] RF-safe mode disabled and normal touch sensitivity restored for amount entry", "info");
+        }
         // Use cap touch system for all key input (includes RF-safe mode validation)
         const std::string keyPressed = getTouch();
         if (keyPressed != "") {
