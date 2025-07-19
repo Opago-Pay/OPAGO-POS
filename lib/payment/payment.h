@@ -31,6 +31,9 @@ extern bool connectionLoss;
 extern TaskHandle_t onlineMonitorTaskHandle;
 extern bool onlineMonitorActive;
 extern std::string onlinePaymentHash;
+extern int lastApiResponseCode; // Track last API response for connection recovery
+extern int consecutiveFailures; // Track consecutive API failures for mesh WiFi handling
+extern unsigned long firstFailureTime; // Track when failures started
 
 std::string parseCallbackUrl(const std::string &response);
 std::string parseInvoice(const std::string &json);

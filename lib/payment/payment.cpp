@@ -4,6 +4,9 @@ uint8_t lastRenderedQRCode = 0;
 bool lastConnectionLossState = false;
 std::string onlinePaymentHash = "";
 unsigned long paymentStartTime = 0;
+int lastApiResponseCode = 0; // Track last API response for connection recovery
+int consecutiveFailures = 0; // Track consecutive API failures for mesh WiFi handling
+unsigned long firstFailureTime = 0; // Track when failures started
 
 std::string parseCallbackUrl(const std::string &response) {
     DynamicJsonDocument doc(1024);
@@ -450,47 +453,101 @@ PaymentState checkPaymentStatus(const std::string &lnurlQR, const std::string &p
         }
     }
     
-    // Check for payment via POS status API if we're online
+    // Check for payment via POS status API - try both when online and offline for recovery
+    static unsigned long lastOnlineCheck = 0;
+    static unsigned long lastRecoveryCheck = 0;
+    const unsigned long ONLINE_CHECK_INTERVAL = 2100; // Check every 2.1 seconds when online
+    const unsigned long RECOVERY_CHECK_INTERVAL = 3000; // Check every 3 seconds when offline for recovery (faster for mesh WiFi)
+    const unsigned long FAST_RECOVERY_INTERVAL = 1000; // Check every 1 second for first 30 seconds (mesh WiFi recovery)
+    
+    unsigned long currentTime = millis();
+    bool shouldCheckAPI = false;
+    
     if (onlineStatus) {
-        static unsigned long lastOnlineCheck = 0;
-        const unsigned long ONLINE_CHECK_INTERVAL = 2100; // Check every 2.1 seconds
-        
-        unsigned long currentTime = millis();
+        // Normal online checking
         if (currentTime - lastOnlineCheck >= ONLINE_CHECK_INTERVAL) {
-            logger::write("[payment] Checking POS status API for payment", "info");
+            shouldCheckAPI = true;
+            lastOnlineCheck = currentTime;
+            logger::write("[payment] Checking POS status API for payment (online mode)", "info");
+        }
+    } else {
+        // Recovery checking when offline - use fast recovery for mesh WiFi scenarios
+        unsigned long recoveryInterval = RECOVERY_CHECK_INTERVAL;
+        
+        // Use faster recovery interval if we just went offline (likely mesh WiFi switching)
+        if (firstFailureTime > 0 && (currentTime - firstFailureTime) < 30000) {
+            recoveryInterval = FAST_RECOVERY_INTERVAL;
+        }
+        
+        if (currentTime - lastRecoveryCheck >= recoveryInterval) {
+            shouldCheckAPI = true;
+            lastRecoveryCheck = currentTime;
             
-            // Check POS status API for payment
-            std::string posId = extractPosIdFromCallbackUrl();
-            std::string apiKey = config::getString("apiKey.key");
-            std::string returnedPin;
-            
-            if (!posId.empty() && !apiKey.empty()) {
-                logger::write("[payment] Polling POS ID: " + posId, "debug");
-                bool paymentReceived = checkPosPaymentStatus(posId, apiKey, pin, returnedPin);
-                if (paymentReceived) {
-                    logger::write("[payment] Payment confirmed via POS status API!", "info");
-                    if (!returnedPin.empty()) {
-                        logger::write("[payment] Using API PIN for verification: " + returnedPin, "info");
-                        // Update the global API PIN for verification
-                        extern std::string apiReturnedPin;
-                        apiReturnedPin = returnedPin;
-                    }
-                    paymentisMade = true;
-                    logger::write("[payment] Setting paymentisMade=true due to POS status API confirmation", "info");
-                    
-                    // CRITICAL: Signal NFC task if payment was made via POS status API
-                    if (config::getBool("nfcEnabled")) {
-                        logger::write("[payment] Setting LNURL_WITHDRAW_SUCCESS_BIT for NFC task after POS status API confirmation", "info");
-                        xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_SUCCESS_BIT);
-                    }
-                    
-                    return PaymentState::PAYMENT_SUCCESS;
-                }
+            if (recoveryInterval == FAST_RECOVERY_INTERVAL) {
+                logger::write("[payment] Fast recovery attempt for mesh WiFi switching (1s interval)", "info");
             } else {
-                logger::write("[payment] Cannot poll POS status - missing POS ID or API key", "error");
+                logger::write("[payment] Standard recovery attempt (3s interval)", "info");
+            }
+        }
+    }
+    
+    if (shouldCheckAPI) {
+        // Check POS status API for payment
+        std::string posId = extractPosIdFromCallbackUrl();
+        std::string apiKey = config::getString("apiKey.key");
+        std::string returnedPin;
+        
+        if (!posId.empty() && !apiKey.empty()) {
+            logger::write("[payment] Polling POS ID: " + posId, "debug");
+            bool paymentReceived = checkPosPaymentStatus(posId, apiKey, pin, returnedPin);
+            
+            // If we successfully got a response (even if no payment yet), we're back online
+            if (!onlineStatus && WiFi.status() == WL_CONNECTED && lastApiResponseCode != -1) {
+                // We got a valid HTTP response (not a connection failure), so connection is restored
+                logger::write("[payment] Connection restored! Got HTTP " + std::to_string(lastApiResponseCode) + ", setting onlineStatus = true", "info");
+                
+                // Reset failure tracking since we're back online
+                consecutiveFailures = 0;
+                firstFailureTime = 0;
+                
+                onlineStatus = true;
+            } else if (lastApiResponseCode == -1) {
+                // Track consecutive failures for better mesh WiFi handling
+                consecutiveFailures++;
+                if (firstFailureTime == 0) {
+                    firstFailureTime = currentTime;
+                }
+                
+                logger::write("[payment] API failure count: " + std::to_string(consecutiveFailures) + 
+                            " (duration: " + std::to_string((currentTime - firstFailureTime) / 1000) + "s)", "info");
             }
             
-            lastOnlineCheck = currentTime;
+            if (paymentReceived) {
+                logger::write("[payment] Payment confirmed via POS status API!", "info");
+                if (!returnedPin.empty()) {
+                    logger::write("[payment] Using API PIN for verification: " + returnedPin, "info");
+                    // Update the global API PIN for verification
+                    extern std::string apiReturnedPin;
+                    apiReturnedPin = returnedPin;
+                }
+                
+                // Reset failure tracking on successful payment
+                consecutiveFailures = 0;
+                firstFailureTime = 0;
+                
+                paymentisMade = true;
+                logger::write("[payment] Setting paymentisMade=true due to POS status API confirmation", "info");
+                
+                // CRITICAL: Signal NFC task if payment was made via POS status API
+                if (config::getBool("nfcEnabled")) {
+                    logger::write("[payment] Setting LNURL_WITHDRAW_SUCCESS_BIT for NFC task after POS status API confirmation", "info");
+                    xEventGroupSetBits(appEventGroup, LNURL_WITHDRAW_SUCCESS_BIT);
+                }
+                
+                return PaymentState::PAYMENT_SUCCESS;
+            }
+        } else {
+            logger::write("[payment] Cannot poll POS status - missing POS ID or API key", "error");
         }
     }
     
@@ -574,6 +631,8 @@ bool checkPosPaymentStatus(const std::string &posId, const std::string &apiKey, 
     // Check if Wi-Fi is connected
     if (WiFi.status() != WL_CONNECTED) {
         logger::write("[payment] Wi-Fi not connected for POS status check", "debug");
+        // Also set onlineStatus to false if WiFi is not connected
+        onlineStatus = false;
         return false;
     }
     
@@ -610,7 +669,17 @@ bool checkPosPaymentStatus(const std::string &posId, const std::string &apiKey, 
         
         int httpResponseCode = http->GET();
         
+        // Store the response code for recovery logic
+        lastApiResponseCode = httpResponseCode;
+        
         logger::write("[payment] POS status API response code: " + std::to_string(httpResponseCode), "info");
+        
+        // Log additional WiFi diagnostics for mesh troubleshooting
+        if (httpResponseCode == -1) {
+            logger::write("[payment] WiFi diagnostics - Status: " + std::to_string(WiFi.status()) + 
+                        ", RSSI: " + std::to_string(WiFi.RSSI()) + 
+                        ", SSID: " + WiFi.SSID().c_str(), "info");
+        }
         
         if (httpResponseCode == 200) {
             std::string response = http->getString().c_str();
@@ -672,8 +741,22 @@ bool checkPosPaymentStatus(const std::string &posId, const std::string &apiKey, 
             delete http;
             return false;
             
+        } else if (httpResponseCode == -1) {
+            // Handle connection failures (SSL errors, DNS failures, mesh WiFi AP switching, etc.)
+            logger::write("[payment] POS status API connection failure (SSL/DNS/Mesh switching): " + std::to_string(httpResponseCode), "error");
+            logger::write("[payment] This may be caused by mesh WiFi AP switching or network instability", "info");
+            logger::write("[payment] Setting WiFi status to disconnected due to connection failure", "info");
+            
+            // Set onlineStatus to false to trigger WiFi disconnect handling
+            onlineStatus = false;
+            
+            http->end();
+            xSemaphoreGive(wifiSemaphore);
+            delete http;
+            return false;
+            
         } else {
-            // Handle other errors
+            // Handle other HTTP errors (non-connection related)
             logger::write("[payment] POS status API error: " + std::to_string(httpResponseCode), "error");
             http->end();
             xSemaphoreGive(wifiSemaphore);
