@@ -1,0 +1,22 @@
+#!/bin/sh
+# Secret guard pre-commit hook (BLOCKING version)
+# Refuses to commit if sensitive files are staged.
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)
+[ -z "$STAGED_FILES" ] && exit 0
+FOUND=0
+for file in $STAGED_FILES; do
+    [ -z "$file" ] && continue
+    [ ! -f "$file" ] && continue
+    case "$(basename "$file")" in
+        .age-identity|.age-key|*.key|*.pem|*.p12|*.pfx|id_rsa|id_ed25519)
+            echo "[secret-guard] ❌ BLOCKED: sensitive file staged: $file"
+            FOUND=$((FOUND + 1))
+            ;;
+    esac
+done
+if [ "$FOUND" -gt 0 ]; then
+    echo "[secret-guard] Commit REFUSED — $FOUND sensitive file(s) detected."
+    echo "[secret-guard] Remove them from staging: git reset HEAD <file>"
+    exit 1
+fi
+exit 0
